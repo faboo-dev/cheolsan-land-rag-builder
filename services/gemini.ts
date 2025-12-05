@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { KnowledgeSource, ContentChunk } from "../types";
+import { KnowledgeSource, ContentChunk, DebugSnippet } from "../types";
 import { cosineSimilarity } from "../utils/textProcessing";
 
 // Model constants
@@ -18,19 +18,28 @@ export class GeminiService {
   async generateEmbedding(text: string): Promise<number[]> {
     const cleanText = text.replace(/\n/g, " ");
     
-    const result = await this.ai.models.embedContent({
-      model: EMBEDDING_MODEL,
-      contents: cleanText,
-    });
+    // Safety check for empty text
+    if (!cleanText.trim()) return [];
 
-    // Handle potential array structure in response safely
-    const embeddingValues = result.embeddings?.[0]?.values;
+    try {
+        const result = await this.ai.models.embedContent({
+          model: EMBEDDING_MODEL,
+          contents: cleanText,
+        });
 
-    if (!embeddingValues) {
-      throw new Error("Failed to generate embedding");
+        // Handle potential array structure in response safely with optional chaining
+        const embeddingValues = result.embeddings?.[0]?.values;
+
+        if (!embeddingValues) {
+          console.warn("Embedding generated but no values found.");
+          return [];
+        }
+
+        return embeddingValues;
+    } catch (error) {
+        console.error("Embedding Error:", error);
+        throw error;
     }
-
-    return embeddingValues;
   }
 
   // --- Step 1: RAG Answer (Based ONLY on internal DB) ---
@@ -127,23 +136,33 @@ Output format:
     comparisonAnswer: string; 
     sources: any[];
     webSources: any[];
+    debugSnippets: DebugSnippet[]; // New return field
   }> {
     // 1. Retrieval (Vector Search)
     const queryEmbedding = await this.generateEmbedding(query);
     const allChunks: { chunk: ContentChunk; source: KnowledgeSource; score: number }[] = [];
 
+    // Calculate similarity for all chunks
     sources.forEach(source => {
       source.chunks.forEach(chunk => {
-        if (chunk.embedding) {
+        if (chunk.embedding && chunk.embedding.length > 0) {
           const score = cosineSimilarity(queryEmbedding, chunk.embedding);
           allChunks.push({ chunk, source, score });
         }
       });
     });
 
+    // Sort by score (descending)
     allChunks.sort((a, b) => b.score - a.score);
     const topChunks = allChunks.slice(0, 10); // Top 10 contexts
     
+    // Prepare Debug Snippets
+    const debugSnippets: DebugSnippet[] = topChunks.map(item => ({
+      score: item.score,
+      text: item.chunk.text,
+      sourceTitle: item.source.title
+    }));
+
     // Format Context for RAG
     const contextText = topChunks.map(item => `
 [Source: ${item.source.title} (${item.source.date})]
@@ -171,7 +190,8 @@ ${item.chunk.text}
       webAnswer: webResult.text,
       comparisonAnswer,
       sources: uniqueSources,
-      webSources: webResult.sources
+      webSources: webResult.sources,
+      debugSnippets // Return debug info
     };
   }
 }
