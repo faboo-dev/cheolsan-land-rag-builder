@@ -33,7 +33,11 @@ const App: React.FC = () => {
     if (savedInstruction) {
       setSystemInstruction(savedInstruction);
     } else {
-      setSystemInstruction("너는 철산랜드의 AI 가이드야. 방문객에게 친절하고 전문적으로 안내해줘. 답변은 한국어로 작성해줘.");
+      setSystemInstruction(`너는 철산랜드의 AI 가이드야.
+1. [내 데이터베이스]의 내용을 최우선으로 참고해서 답변해.
+2. 만약 [웹 검색 결과]가 최신 정보(가격 등)라면 비교해서 알려줘.
+3. 답변은 블로그 글처럼 친근하게 작성하고, 이모지를 적절히 사용해.
+4. 필요하다면 표(Table) 형식을 사용해서 비교해줘.`);
     }
   }, []);
 
@@ -54,7 +58,7 @@ const App: React.FC = () => {
 
   const handleSaveInstruction = () => {
     localStorage.setItem(INSTRUCTION_KEY, systemInstruction);
-    alert("AI 페르소나(행동 지침)가 저장되었습니다! 챗봇 탭에서 테스트해보세요.");
+    alert("AI 페르소나 및 답변 구조 설정이 저장되었습니다!");
   };
 
   return (
@@ -67,7 +71,7 @@ const App: React.FC = () => {
             <h1 className="text-2xl font-bold">Cheolsan Land RAG Builder</h1>
           </div>
           <div className="text-sm bg-secondary px-3 py-1 rounded">
-             Prototype v0.1
+             Prototype v0.2
           </div>
         </div>
       </header>
@@ -103,7 +107,7 @@ const App: React.FC = () => {
             }`}
             onClick={() => setActiveTab('manage')}
           >
-            📂 데이터베이스 관리 (Ingestion)
+            📂 데이터베이스 관리 & 설정
           </button>
           <button
             className={`py-2 px-6 font-medium text-sm focus:outline-none ${
@@ -113,7 +117,7 @@ const App: React.FC = () => {
             }`}
             onClick={() => setActiveTab('chat')}
           >
-            💬 챗봇 테스트 (RAG Test)
+            💬 챗봇 테스트 (RAG)
           </button>
         </div>
 
@@ -127,7 +131,7 @@ const App: React.FC = () => {
                     🧠 AI 페르소나/지침 설정 (Prompt Engineering)
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">
-                    AI가 어떤 말투와 태도로 답변할지 설정해보세요. (예: "너는 10년차 여행 전문가야. 반말로 친근하게 설명해줘.")
+                    AI 답변의 <strong>순서, 형태(표/리스트), 말투</strong>를 여기서 자유롭게 정의하세요.
                   </p>
                 </div>
                 <button
@@ -140,9 +144,9 @@ const App: React.FC = () => {
               <textarea
                 value={systemInstruction}
                 onChange={(e) => setSystemInstruction(e.target.value)}
-                className="w-full p-4 border rounded-md shadow-sm focus:ring-2 focus:ring-primary focus:border-primary text-gray-800 leading-relaxed"
-                rows={4}
-                placeholder="여기에 AI에게 내릴 구체적인 지시사항을 입력하세요..."
+                className="w-full p-4 border rounded-md shadow-sm focus:ring-2 focus:ring-primary focus:border-primary text-gray-800 leading-relaxed font-mono text-sm"
+                rows={6}
+                placeholder="예: 1. 내 데이터 내용을 먼저 요약해줘. 2. 그다음 최신 웹 검색 결과와 비교해줘. 3. 답변은 친절한 반말로 해줘."
               />
             </div>
 
