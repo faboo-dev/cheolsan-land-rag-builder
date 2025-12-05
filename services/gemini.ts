@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { KnowledgeSource, ContentChunk } from "../types";
 import { cosineSimilarity } from "../utils/textProcessing";
@@ -10,11 +11,11 @@ export class GeminiService {
   private ai: GoogleGenAI;
 
   constructor() {
+    // @ts-ignore
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    // Clean text for embedding
     const cleanText = text.replace(/\n/g, " ");
     
     const result = await this.ai.models.embedContent({
@@ -22,7 +23,7 @@ export class GeminiService {
       contents: cleanText,
     });
 
-    // Handle potential array structure in response
+    // Handle potential array structure in response safely
     const embeddingValues = result.embeddings?.[0]?.values;
 
     if (!embeddingValues) {
@@ -32,11 +33,103 @@ export class GeminiService {
     return embeddingValues;
   }
 
-  async getAnswer(query: string, sources: KnowledgeSource[]): Promise<{ text: string; sources: any[] }> {
-    // 1. Generate query embedding
-    const queryEmbedding = await this.generateEmbedding(query);
+  // --- Step 1: RAG Answer (Based ONLY on internal DB) ---
+  private async getRAGResponse(query: string, contextText: string): Promise<string> {
+    const prompt = `
+You are the AI assistant for "Cheolsan Land".
+Answer the user's question using **ONLY** the provided context below.
+Do not use outside knowledge yet.
 
-    // 2. Gather all chunks from all processed sources
+Context Information:
+${contextText}
+
+Instructions:
+1. Answer in Korean (Polite/Honorific).
+2. Be very detailed.
+3. Strictly cite sources using the format: [Title](URL).
+4. If the context has YouTube timestamps, include them: [Title @ 02:30](URL).
+5. If the answer is NOT in the context, explicitly say: "제 데이터베이스에는 관련 정보가 없습니다."
+
+User Question: ${query}
+    `;
+
+    const response = await this.ai.models.generateContent({
+      model: CHAT_MODEL,
+      contents: prompt,
+    });
+    
+    return response.text || "답변을 생성할 수 없습니다.";
+  }
+
+  // --- Step 2: Web Search Answer (Latest Info) ---
+  private async getWebSearchResponse(query: string): Promise<{ text: string; sources: any[] }> {
+    try {
+      const response = await this.ai.models.generateContent({
+        model: CHAT_MODEL,
+        contents: `Search the web for the latest information regarding: "${query}". Provide a summary of the most current details, especially prices and dates.`,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
+      });
+
+      // Extract grounding metadata (sources)
+      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const webSources = groundingChunks
+        .map((chunk: any) => chunk.web ? { title: chunk.web.title, url: chunk.web.uri } : null)
+        .filter((item: any) => item !== null);
+
+      return {
+        text: response.text || "웹 검색 결과를 가져올 수 없습니다.",
+        sources: webSources
+      };
+    } catch (e) {
+      console.error("Web Search Error", e);
+      return { text: "최신 정보를 검색하는 도중 오류가 발생했습니다.", sources: [] };
+    }
+  }
+
+  // --- Step 3: Cross Check (Comparison) ---
+  private async getComparisonResponse(query: string, ragText: string, webText: string): Promise<string> {
+    const prompt = `
+Act as a Fact-Checker for "Cheolsan Land".
+Compare the following two pieces of information regarding the user's question: "${query}".
+
+[Info A: Internal Database (Older but verified by owner)]
+${ragText}
+
+[Info B: Latest Web Search]
+${webText}
+
+Instructions:
+1. Identify discrepancies in **Prices**, **Dates**, or **Operational Status**.
+2. If Info B (Latest) is different from Info A, explicitly warn the user. (e.g., "데이터베이스에는 1000엔으로 되어있으나, 최신 검색 결과 1200엔으로 인상된 것으로 보입니다.")
+3. If they match, confirm that the information is still valid.
+4. Keep it concise. Korean language.
+
+Output format:
+- 💰 가격/비용 체크: ...
+- 📅 최신 정보 업데이트: ...
+- ✅ 결론: ...
+    `;
+
+    const response = await this.ai.models.generateContent({
+      model: CHAT_MODEL,
+      contents: prompt,
+    });
+
+    return response.text || "비교 분석을 완료할 수 없습니다.";
+  }
+
+  // --- Main Orchestrator ---
+  async getAnswer(query: string, sources: KnowledgeSource[]): Promise<{ 
+    ragAnswer: string; 
+    webAnswer: string; 
+    comparisonAnswer: string; 
+    sources: any[];
+    webSources: any[];
+  }> {
+    // 1. Retrieval (Vector Search)
+    const queryEmbedding = await this.generateEmbedding(query);
     const allChunks: { chunk: ContentChunk; source: KnowledgeSource; score: number }[] = [];
 
     sources.forEach(source => {
@@ -48,56 +141,15 @@ export class GeminiService {
       });
     });
 
-    // 3. Sort by relevance (cosine similarity)
     allChunks.sort((a, b) => b.score - a.score);
-
-    // 4. Take top K relevant chunks (Context Window)
-    const topChunks = allChunks.slice(0, 15);
+    const topChunks = allChunks.slice(0, 10); // Top 10 contexts
     
-    const contextText = topChunks.map(item => {
-      return `
----
-Source ID: ${item.source.id}
-Source Title: ${item.source.title}
-Date: ${item.source.date}
-URL: ${item.source.url}
-Type: ${item.source.type}
-Content Snippet: ${item.chunk.text}
----
-`;
-    }).join('\n');
+    // Format Context for RAG
+    const contextText = topChunks.map(item => `
+[Source: ${item.source.title} (${item.source.date})]
+${item.chunk.text}
+    `).join('\n\n');
 
-    // 5. Construct Prompt
-    const prompt = `
-You are the AI assistant for "Cheolsan Land", a travel brand. 
-Your goal is to answer user questions using ONLY the provided context below.
-This context comes from the owner's YouTube channel and Naver Blog.
-
-Context Information:
-${contextText}
-
-Instructions:
-1. Answer the user's question explicitly based on the context provided.
-2. If the answer is not in the context, politely say you don't have that information in your current database.
-3. **IMPORTANT**: Prioritize newer information if there are conflicting details (check the 'Date' field).
-4. **CITATIONS (Strict)**: 
-   - You MUST cite your sources at the end of the sentence or paragraph.
-   - **YouTube Timestamps**: Look for patterns like (02:30), [10:15], or just time codes in the text.
-     - If found: [Video Title @ 02:30](URL) 
-     - If no timestamp: [Video Title](URL)
-   - **Blog**: Format as: [Blog Title](URL)
-5. Tone: Friendly, helpful, like a travel expert. Speak in Korean (honorifics/존댓말).
-
-User Question: ${query}
-    `;
-
-    // 6. Generate Answer
-    const response = await this.ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: prompt,
-    });
-
-    // Extract unique sources for UI display
     const uniqueSources = Array.from(new Set(topChunks.map(tc => JSON.stringify({
       title: tc.source.title,
       url: tc.source.url,
@@ -105,9 +157,21 @@ User Question: ${query}
       type: tc.source.type
     })))).map(s => JSON.parse(s));
 
+    // Execute Step 1, 2 in parallel to save time, then Step 3
+    const [ragAnswer, webResult] = await Promise.all([
+      this.getRAGResponse(query, contextText),
+      this.getWebSearchResponse(query)
+    ]);
+
+    // Execute Step 3
+    const comparisonAnswer = await this.getComparisonResponse(query, ragAnswer, webResult.text);
+
     return {
-      text: response.text || "No response generated.",
-      sources: uniqueSources
+      ragAnswer,
+      webAnswer: webResult.text,
+      comparisonAnswer,
+      sources: uniqueSources,
+      webSources: webResult.sources
     };
   }
 }
