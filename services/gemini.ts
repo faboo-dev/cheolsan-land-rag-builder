@@ -125,25 +125,27 @@ Content: ${item.chunk.text}
     // 3. Final Synthesis
     const finalPrompt = `
 [Task]
-Answer the user's question based on the provided "Internal Database" and "Latest Web Search Info".
-Follow the [System Instruction] strictly for tone, style, and structure.
+Answer the user's question by synthesizing the "Internal Database" and "Latest Web Search Info".
+Follow the [System Instruction] strictly.
 
 [System Instruction / Persona]
 ${systemInstruction}
 
-[Formatting Rules - CRITICAL]
-1. Use **Markdown** for all formatting.
-2. **DO NOT use HTML tags** (like <div>, <table>, <span>). Use Markdown tables and lists instead.
-3. **Inline Citations & Links:**
-   - When citing Internal Database, create a clickable Markdown link: [Link Text](URL).
-   - **YouTube Timestamps:** If the source is YouTube and you mention a specific time (e.g., "at 02:30"), you MUST calculate the seconds (2*60+30 = 150) and append '&t=150' to the URL.
-     Example: "As seen in the video [Video Title @ 02:30](https://youtube.com/watch?v=xyz&t=150)..."
-4. If comparing data (e.g. prices), use a Markdown Table.
+[CRITICAL FORMATTING RULES]
+1. **Markdown Only**: Do NOT use HTML tags (<div>, <table>, <br>). Use standard Markdown syntax.
+2. **Clickable Links (MANDATORY)**:
+   - When you mention a source, you MUST create a standard Markdown link: \`[Link Title](URL)\`.
+   - NEVER provide a title without the URL.
+   - Example: "Check this post: [My Blog Post](https://blog.naver.com/...)"
+3. **YouTube Timestamp Logic**:
+   - If the context mentions a specific time (e.g., "at 02:30"), you MUST calculate the seconds (2*60+30 = 150) and append \`&t=150\` to the YouTube URL.
+   - Example: "In the video [Review @ 02:30](https://youtu.be/xyz?t=150)..."
+4. **Tables**: Use Markdown tables for comparisons. (e.g. \`| Col1 | Col2 |\`)
 
-[Internal Database (User's Verified Content)]
+[Internal Database Content]
 ${internalContext}
 
-[Latest Web Search Info (For Cross-checking)]
+[Latest Web Search Info]
 ${webResult.text}
 
 [User Question]
