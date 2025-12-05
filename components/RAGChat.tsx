@@ -6,9 +6,10 @@ import { GeminiService } from '../services/gemini';
 interface Props {
   geminiService: GeminiService;
   sources: KnowledgeSource[];
+  systemInstruction: string;
 }
 
-const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
+const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', ragAnswer: '안녕하세요! 철산랜드 AI입니다. \n\n1. 제 데이터베이스(블로그/유튜브)\n2. 실시간 구글 검색\n3. 팩트 크로스체크\n\n이 3단계로 완벽하게 분석해드립니다. 궁금한 점을 물어보세요!' }
   ]);
@@ -40,8 +41,8 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
     setIsLoading(true);
 
     try {
-      // Call the updated service method
-      const result = await geminiService.getAnswer(userMessage.text!, sources);
+      // Call the updated service method with systemInstruction
+      const result = await geminiService.getAnswer(userMessage.text!, sources, systemInstruction);
       
       const aiMessage: ChatMessage = { 
         role: 'model', 
@@ -67,13 +68,16 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
 -------------------------
 사용자 질문: "${messages[messages.indexOf(msg) - 1]?.text}"
 
-[1. 검색된 데이터 조각 (Score 높은 순)]
+[1. 적용된 페르소나/지침]
+${systemInstruction.substring(0, 100)}...
+
+[2. 검색된 데이터 조각 (Score 높은 순)]
 ${msg.debugSnippets?.map((snip, i) => `
 ${i + 1}. [${(snip.score * 100).toFixed(1)}%] ${snip.sourceTitle}
    "${snip.text.substring(0, 100).replace(/\n/g, ' ')}..."
 `).join('')}
 
-[2. AI 답변 요약]
+[3. AI 답변 요약]
 - RAG: ${msg.ragAnswer?.substring(0, 50)}...
 - Web: ${msg.webAnswer?.substring(0, 50)}...
 -------------------------
