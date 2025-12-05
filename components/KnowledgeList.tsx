@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { KnowledgeSource, SourceType } from '../types';
 
@@ -7,6 +8,15 @@ interface Props {
 }
 
 const KnowledgeList: React.FC<Props> = ({ sources, onDelete }) => {
+  const handleExportSummary = () => {
+      const summary = sources.map(s => 
+        `[${s.type}] ${s.title} (${s.date}) - URL: ${s.url} - Chunks: ${s.chunks.length}`
+      ).join('\n');
+      
+      navigator.clipboard.writeText(summary);
+      alert(`총 ${sources.length}개의 데이터 목록이 복사되었습니다.`);
+  };
+
   if (sources.length === 0) {
     return (
       <div className="text-center p-8 text-gray-500">
@@ -17,9 +27,16 @@ const KnowledgeList: React.FC<Props> = ({ sources, onDelete }) => {
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-md border border-gray-200 mt-6 md:mt-0">
-      <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center justify-between">
-        <span>📚 내 데이터베이스 ({sources.length})</span>
-      </h2>
+      <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold text-gray-800">📚 내 데이터베이스 ({sources.length})</h2>
+          <button 
+            onClick={handleExportSummary}
+            className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded border"
+          >
+            📤 DB 요약 복사
+          </button>
+      </div>
+      
       <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
         {sources.map((source) => (
           <div key={source.id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
