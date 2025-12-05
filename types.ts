@@ -23,7 +23,7 @@ export interface KnowledgeSource {
   processed: boolean;
 }
 
-// New: RAG 검색 정확도 진단을 위한 타입
+// RAG 검색 정확도 진단을 위한 타입
 export interface DebugSnippet {
   score: number;       // 유사도 점수 (0~1)
   text: string;        // 매칭된 텍스트 조각
@@ -32,17 +32,12 @@ export interface DebugSnippet {
 
 export interface ChatMessage {
   role: 'user' | 'model';
-  text?: string; // Fallback or simple text
-  
-  // New structured response fields
-  ragAnswer?: string;       // 1. 내 데이터베이스 답변
-  webAnswer?: string;       // 2. 최신 웹 검색 답변
-  comparisonAnswer?: string; // 3. 크로스 체크 답변
+  text?: string; // 통합된 답변 텍스트
   
   sources?: { title: string; url: string; date: string }[];
-  webSources?: { title: string; url: string }[]; // Links from Google Search
+  webSources?: { title: string; url: string }[]; 
   
-  // New: 진단 데이터
+  // 진단 데이터
   debugSnippets?: DebugSnippet[]; 
 }
 
