@@ -112,22 +112,41 @@ ${msg.text?.substring(0, 100)}...
             {msg.role === 'model' && (
               <div className="w-full max-w-3xl space-y-4">
                 {/* Unified Answer Bubble with Markdown Rendering */}
-                <div className="bg-white p-5 rounded-lg shadow-sm border border-gray-200">
+                <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                     <div className="text-sm text-gray-800 leading-relaxed markdown-body">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
                         components={{
-                          table: ({node, ...props}) => <table className="min-w-full divide-y divide-gray-300 border border-gray-300 my-4" {...props} />,
+                          // Table Styling
+                          table: ({node, ...props}) => (
+                            <div className="overflow-x-auto my-4 rounded-lg border border-gray-200">
+                              <table className="min-w-full divide-y divide-gray-200" {...props} />
+                            </div>
+                          ),
                           thead: ({node, ...props}) => <thead className="bg-gray-50" {...props} />,
-                          th: ({node, ...props}) => <th className="px-3 py-3.5 text-left text-xs font-bold text-gray-900 uppercase tracking-wider border-b border-gray-200" {...props} />,
-                          td: ({node, ...props}) => <td className="whitespace-pre-wrap px-3 py-4 text-sm text-gray-500 border-b border-gray-100" {...props} />,
-                          a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 hover:underline font-medium" target="_blank" rel="noopener noreferrer" {...props} />,
-                          ul: ({node, ...props}) => <ul className="list-disc ml-5 my-2 space-y-1" {...props} />,
-                          ol: ({node, ...props}) => <ol className="list-decimal ml-5 my-2 space-y-1" {...props} />,
-                          h1: ({node, ...props}) => <h1 className="text-2xl font-bold my-4 pb-2 border-b" {...props} />,
-                          h2: ({node, ...props}) => <h2 className="text-xl font-bold my-3 pb-1 border-b-gray-100 border-b" {...props} />,
-                          h3: ({node, ...props}) => <h3 className="text-lg font-bold my-2 text-gray-800" {...props} />,
-                          blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-gray-200 pl-4 italic my-4 text-gray-600" {...props} />,
+                          tbody: ({node, ...props}) => <tbody className="bg-white divide-y divide-gray-200" {...props} />,
+                          tr: ({node, ...props}) => <tr className="even:bg-gray-50 hover:bg-gray-100 transition-colors" {...props} />,
+                          th: ({node, ...props}) => <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider border-b" {...props} />,
+                          td: ({node, ...props}) => <td className="px-4 py-3 text-sm text-gray-600 whitespace-pre-wrap" {...props} />,
+                          
+                          // Link Styling
+                          a: ({node, ...props}) => (
+                            <a 
+                              className="text-blue-600 hover:text-blue-800 hover:underline font-semibold transition-colors bg-blue-50 px-1 rounded" 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              {...props} 
+                            />
+                          ),
+                          
+                          // Other Elements
+                          ul: ({node, ...props}) => <ul className="list-disc ml-5 my-2 space-y-1 text-gray-700" {...props} />,
+                          ol: ({node, ...props}) => <ol className="list-decimal ml-5 my-2 space-y-1 text-gray-700" {...props} />,
+                          h1: ({node, ...props}) => <h1 className="text-2xl font-bold my-4 pb-2 border-b text-gray-900" {...props} />,
+                          h2: ({node, ...props}) => <h2 className="text-xl font-bold my-3 pb-2 border-b text-gray-800" {...props} />,
+                          h3: ({node, ...props}) => <h3 className="text-lg font-bold my-2 text-primary" {...props} />,
+                          blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-primary pl-4 py-2 bg-gray-50 italic my-4 text-gray-600 rounded-r" {...props} />,
+                          code: ({node, ...props}) => <code className="bg-gray-100 px-1 py-0.5 rounded text-red-500 font-mono text-xs" {...props} />,
                         }}
                       >
                         {msg.text || ''}
@@ -136,14 +155,16 @@ ${msg.text?.substring(0, 100)}...
 
                     {/* Footer Sources (Fallback/Summary) */}
                     {((msg.sources?.length || 0) + (msg.webSources?.length || 0) > 0) && (
-                        <div className="mt-6 pt-4 border-t border-gray-100 flex flex-col gap-3">
+                        <div className="mt-8 pt-4 border-t border-gray-100 flex flex-col gap-3 bg-gray-50 -mx-6 -mb-6 p-6">
                              {/* Internal Sources Summary */}
                             {msg.sources && msg.sources.length > 0 && (
                                 <div className="text-xs text-gray-500">
-                                    <span className="font-bold text-gray-700 block mb-1">📚 참고 자료 목록:</span>
+                                    <span className="font-bold text-gray-700 block mb-2 flex items-center">
+                                        📚 이 답변에 참고된 내 데이터:
+                                    </span>
                                     <div className="flex flex-wrap gap-2">
                                     {msg.sources.map((src, i) => (
-                                        <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" className="bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors text-gray-700">
+                                        <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" className="bg-white border border-gray-200 hover:border-primary hover:text-primary px-3 py-1.5 rounded-full transition-all text-gray-600 shadow-sm">
                                             {src.title}
                                         </a>
                                     ))}
@@ -156,7 +177,7 @@ ${msg.text?.substring(0, 100)}...
 
                 {/* DEBUG PANEL */}
                 {isDebugMode && msg.debugSnippets && (
-                    <div className="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-xs shadow-inner">
+                    <div className="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-xs shadow-inner mt-2">
                         <div className="flex justify-between items-center mb-2 border-b border-gray-600 pb-2">
                             <h4 className="font-bold text-white">🔍 검색 데이터 분석 (X-Ray)</h4>
                             <button onClick={() => handleCopyReport(msg)} className="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded border border-gray-500">
@@ -185,7 +206,7 @@ ${msg.text?.substring(0, 100)}...
         {isLoading && (
             <div className="flex items-center space-x-2 p-4 bg-white rounded-lg shadow-sm w-fit">
                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-               <span className="text-sm text-gray-500">지침에 따라 분석 및 답변 생성 중...</span>
+               <span className="text-sm text-gray-500">지침에 따라 분석 및 답변 생성 중... (웹 검색 포함)</span>
             </div>
         )}
         <div ref={messagesEndRef} />
