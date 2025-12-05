@@ -23,6 +23,13 @@ export interface KnowledgeSource {
   processed: boolean;
 }
 
+// New: RAG 검색 정확도 진단을 위한 타입
+export interface DebugSnippet {
+  score: number;       // 유사도 점수 (0~1)
+  text: string;        // 매칭된 텍스트 조각
+  sourceTitle: string; // 출처 제목
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   text?: string; // Fallback or simple text
@@ -34,6 +41,9 @@ export interface ChatMessage {
   
   sources?: { title: string; url: string; date: string }[];
   webSources?: { title: string; url: string }[]; // Links from Google Search
+  
+  // New: 진단 데이터
+  debugSnippets?: DebugSnippet[]; 
 }
 
 export interface AppState {
