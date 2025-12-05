@@ -43,23 +43,22 @@ export class GeminiService {
   }
 
   // --- Step 1: RAG Answer (Based ONLY on internal DB) ---
-  private async getRAGResponse(query: string, contextText: string): Promise<string> {
+  private async getRAGResponse(query: string, contextText: string, systemInstruction: string): Promise<string> {
     const prompt = `
-You are the AI assistant for "Cheolsan Land".
-Answer the user's question using **ONLY** the provided context below.
-Do not use outside knowledge yet.
+[System Persona / User Instructions]
+${systemInstruction}
 
-Context Information:
+[Strict Operational Rules]
+1. You must answer using **ONLY** the provided context below. Do not use external knowledge for this part.
+2. Strictly cite sources using the format: [Title](URL).
+3. If the context has YouTube timestamps, include them: [Title @ 02:30](URL).
+4. If the answer is NOT in the context, explicitly say: "제 데이터베이스에는 관련 정보가 없습니다."
+
+[Context Information]
 ${contextText}
 
-Instructions:
-1. Answer in Korean (Polite/Honorific).
-2. Be very detailed.
-3. Strictly cite sources using the format: [Title](URL).
-4. If the context has YouTube timestamps, include them: [Title @ 02:30](URL).
-5. If the answer is NOT in the context, explicitly say: "제 데이터베이스에는 관련 정보가 없습니다."
-
-User Question: ${query}
+[User Question]
+${query}
     `;
 
     const response = await this.ai.models.generateContent({
@@ -130,7 +129,7 @@ Output format:
   }
 
   // --- Main Orchestrator ---
-  async getAnswer(query: string, sources: KnowledgeSource[]): Promise<{ 
+  async getAnswer(query: string, sources: KnowledgeSource[], systemInstruction: string = "너는 친절한 AI 어시스턴트야."): Promise<{ 
     ragAnswer: string; 
     webAnswer: string; 
     comparisonAnswer: string; 
@@ -178,7 +177,7 @@ ${item.chunk.text}
 
     // Execute Step 1, 2 in parallel to save time, then Step 3
     const [ragAnswer, webResult] = await Promise.all([
-      this.getRAGResponse(query, contextText),
+      this.getRAGResponse(query, contextText, systemInstruction),
       this.getWebSearchResponse(query)
     ]);
 
