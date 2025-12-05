@@ -17,8 +17,6 @@ export class GeminiService {
 
   async generateEmbedding(text: string): Promise<number[]> {
     const cleanText = text.replace(/\n/g, " ");
-    
-    // Safety check for empty text
     if (!cleanText.trim()) return [];
 
     try {
@@ -27,7 +25,6 @@ export class GeminiService {
           contents: cleanText,
         });
 
-        // Handle potential array structure in response safely with optional chaining
         const embeddingValues = result.embeddings?.[0]?.values;
 
         if (!embeddingValues) {
@@ -42,45 +39,18 @@ export class GeminiService {
     }
   }
 
-  // --- Step 1: RAG Answer (Based ONLY on internal DB) ---
-  private async getRAGResponse(query: string, contextText: string, systemInstruction: string): Promise<string> {
-    const prompt = `
-[System Persona / User Instructions]
-${systemInstruction}
-
-[Strict Operational Rules]
-1. You must answer using **ONLY** the provided context below. Do not use external knowledge for this part.
-2. Strictly cite sources using the format: [Title](URL).
-3. If the context has YouTube timestamps, include them: [Title @ 02:30](URL).
-4. If the answer is NOT in the context, explicitly say: "제 데이터베이스에는 관련 정보가 없습니다."
-
-[Context Information]
-${contextText}
-
-[User Question]
-${query}
-    `;
-
-    const response = await this.ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: prompt,
-    });
-    
-    return response.text || "답변을 생성할 수 없습니다.";
-  }
-
-  // --- Step 2: Web Search Answer (Latest Info) ---
-  private async getWebSearchResponse(query: string): Promise<{ text: string; sources: any[] }> {
+  // --- Web Search Helper ---
+  // 단순히 최신 정보를 긁어오는 역할만 수행
+  private async fetchWebInfo(query: string): Promise<{ text: string; sources: any[] }> {
     try {
       const response = await this.ai.models.generateContent({
         model: CHAT_MODEL,
-        contents: `Search the web for the latest information regarding: "${query}". Provide a summary of the most current details, especially prices and dates.`,
+        contents: `Search the web for the latest information regarding: "${query}". Provide a detailed summary of facts, prices, and dates.`,
         config: {
           tools: [{ googleSearch: {} }],
         },
       });
 
-      // Extract grounding metadata (sources)
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const webSources = groundingChunks
         .map((chunk: any) => chunk.web ? { title: chunk.web.title, url: chunk.web.uri } : null)
@@ -92,56 +62,21 @@ ${query}
       };
     } catch (e) {
       console.error("Web Search Error", e);
-      return { text: "최신 정보를 검색하는 도중 오류가 발생했습니다.", sources: [] };
+      return { text: "(웹 검색 실패)", sources: [] };
     }
   }
 
-  // --- Step 3: Cross Check (Comparison) ---
-  private async getComparisonResponse(query: string, ragText: string, webText: string): Promise<string> {
-    const prompt = `
-Act as a Fact-Checker for "Cheolsan Land".
-Compare the following two pieces of information regarding the user's question: "${query}".
-
-[Info A: Internal Database (Older but verified by owner)]
-${ragText}
-
-[Info B: Latest Web Search]
-${webText}
-
-Instructions:
-1. Identify discrepancies in **Prices**, **Dates**, or **Operational Status**.
-2. If Info B (Latest) is different from Info A, explicitly warn the user. (e.g., "데이터베이스에는 1000엔으로 되어있으나, 최신 검색 결과 1200엔으로 인상된 것으로 보입니다.")
-3. If they match, confirm that the information is still valid.
-4. Keep it concise. Korean language.
-
-Output format:
-- 💰 가격/비용 체크: ...
-- 📅 최신 정보 업데이트: ...
-- ✅ 결론: ...
-    `;
-
-    const response = await this.ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: prompt,
-    });
-
-    return response.text || "비교 분석을 완료할 수 없습니다.";
-  }
-
-  // --- Main Orchestrator ---
-  async getAnswer(query: string, sources: KnowledgeSource[], systemInstruction: string = "너는 친절한 AI 어시스턴트야."): Promise<{ 
-    ragAnswer: string; 
-    webAnswer: string; 
-    comparisonAnswer: string; 
+  // --- Main Orchestrator (Integrated Logic) ---
+  async getAnswer(query: string, sources: KnowledgeSource[], systemInstruction: string): Promise<{ 
+    answer: string; 
     sources: any[];
     webSources: any[];
-    debugSnippets: DebugSnippet[]; // New return field
+    debugSnippets: DebugSnippet[]; 
   }> {
-    // 1. Retrieval (Vector Search)
+    // 1. Retrieval (Vector Search) - 내 데이터 찾기
     const queryEmbedding = await this.generateEmbedding(query);
     const allChunks: { chunk: ContentChunk; source: KnowledgeSource; score: number }[] = [];
 
-    // Calculate similarity for all chunks
     sources.forEach(source => {
       source.chunks.forEach(chunk => {
         if (chunk.embedding && chunk.embedding.length > 0) {
@@ -151,19 +86,18 @@ Output format:
       });
     });
 
-    // Sort by score (descending)
     allChunks.sort((a, b) => b.score - a.score);
-    const topChunks = allChunks.slice(0, 10); // Top 10 contexts
+    const topChunks = allChunks.slice(10); // 상위 10개 문맥
     
-    // Prepare Debug Snippets
+    // Debug Data Preparation
     const debugSnippets: DebugSnippet[] = topChunks.map(item => ({
       score: item.score,
       text: item.chunk.text,
       sourceTitle: item.source.title
     }));
 
-    // Format Context for RAG
-    const contextText = topChunks.map(item => `
+    // Format Internal Context
+    const internalContext = topChunks.map(item => `
 [Source: ${item.source.title} (${item.source.date})]
 ${item.chunk.text}
     `).join('\n\n');
@@ -175,22 +109,45 @@ ${item.chunk.text}
       type: tc.source.type
     })))).map(s => JSON.parse(s));
 
-    // Execute Step 1, 2 in parallel to save time, then Step 3
-    const [ragAnswer, webResult] = await Promise.all([
-      this.getRAGResponse(query, contextText, systemInstruction),
-      this.getWebSearchResponse(query)
-    ]);
+    // 2. Fetch Web Info (병렬로 실행하지 않고 순차적으로 데이터 확보)
+    // 사용자가 '최신 정보'를 원할 수 있으므로 항상 검색 정보를 가져옵니다.
+    const webResult = await this.fetchWebInfo(query);
 
-    // Execute Step 3
-    const comparisonAnswer = await this.getComparisonResponse(query, ragAnswer, webResult.text);
+    // 3. Final Synthesis (통합 답변 생성)
+    // 사용자의 systemInstruction이 답변의 구조와 형태를 완전히 결정하도록 프롬프트를 구성합니다.
+    const finalPrompt = `
+[Task]
+Answer the user's question based on the provided "Internal Database" and "Latest Web Search Info".
+Follow the [System Instruction] strictly for tone, style, and structure.
+
+[System Instruction / Persona]
+${systemInstruction}
+
+[Internal Database (User's Verified Content)]
+${internalContext}
+
+[Latest Web Search Info (For Cross-checking)]
+${webResult.text}
+
+[User Question]
+${query}
+
+[Rules]
+1. If the System Instruction asks for a specific format (e.g., table, list, comparison), follow it.
+2. If there is a conflict between Internal DB and Web Search (e.g., prices), explicitly mention it unless instructed otherwise.
+3. Cite internal sources as [Title](URL) if possible.
+    `;
+
+    const response = await this.ai.models.generateContent({
+      model: CHAT_MODEL,
+      contents: finalPrompt,
+    });
 
     return {
-      ragAnswer,
-      webAnswer: webResult.text,
-      comparisonAnswer,
+      answer: response.text || "답변을 생성할 수 없습니다.",
       sources: uniqueSources,
       webSources: webResult.sources,
-      debugSnippets // Return debug info
+      debugSnippets
     };
   }
 }
