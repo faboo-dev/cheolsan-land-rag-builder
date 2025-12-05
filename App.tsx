@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import IngestionPanel from './components/IngestionPanel';
 import KnowledgeList from './components/KnowledgeList';
@@ -7,23 +8,32 @@ import { GeminiService } from './services/gemini';
 
 // Use local storage to simulate a database for this prototype
 const STORAGE_KEY = 'cheolsan_rag_db';
+const INSTRUCTION_KEY = 'cheolsan_rag_instruction';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'manage' | 'chat'>('manage');
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
+  const [systemInstruction, setSystemInstruction] = useState('');
   
   // Initialize Gemini Service
   const geminiService = useMemo(() => new GeminiService(), []);
 
   // Load from LocalStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
+    const savedSources = localStorage.getItem(STORAGE_KEY);
+    if (savedSources) {
       try {
-        setSources(JSON.parse(saved));
+        setSources(JSON.parse(savedSources));
       } catch (e) {
         console.error("Failed to load database", e);
       }
+    }
+
+    const savedInstruction = localStorage.getItem(INSTRUCTION_KEY);
+    if (savedInstruction) {
+      setSystemInstruction(savedInstruction);
+    } else {
+      setSystemInstruction("너는 철산랜드의 AI 가이드야. 방문객에게 친절하고 전문적으로 안내해줘. 답변은 한국어로 작성해줘.");
     }
   }, []);
 
@@ -40,6 +50,11 @@ const App: React.FC = () => {
     if (window.confirm("정말 이 데이터를 삭제하시겠습니까?")) {
       setSources(prev => prev.filter(s => s.id !== id));
     }
+  };
+
+  const handleSaveInstruction = () => {
+    localStorage.setItem(INSTRUCTION_KEY, systemInstruction);
+    alert("AI 페르소나(행동 지침)가 저장되었습니다! 챗봇 탭에서 테스트해보세요.");
   };
 
   return (
@@ -103,15 +118,44 @@ const App: React.FC = () => {
         </div>
 
         {activeTab === 'manage' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2">
-              <IngestionPanel 
-                onAddSource={handleAddSource} 
-                geminiService={geminiService} 
+          <div className="space-y-8">
+            {/* Persona Settings Panel */}
+            <div className="bg-white p-6 rounded-lg shadow-md border border-gray-200 bg-gradient-to-r from-gray-50 to-white">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                   <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                    🧠 AI 페르소나/지침 설정 (Prompt Engineering)
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    AI가 어떤 말투와 태도로 답변할지 설정해보세요. (예: "너는 10년차 여행 전문가야. 반말로 친근하게 설명해줘.")
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveInstruction}
+                  className="bg-gray-800 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 font-semibold shadow"
+                >
+                  설정 저장하기
+                </button>
+              </div>
+              <textarea
+                value={systemInstruction}
+                onChange={(e) => setSystemInstruction(e.target.value)}
+                className="w-full p-4 border rounded-md shadow-sm focus:ring-2 focus:ring-primary focus:border-primary text-gray-800 leading-relaxed"
+                rows={4}
+                placeholder="여기에 AI에게 내릴 구체적인 지시사항을 입력하세요..."
               />
             </div>
-            <div>
-              <KnowledgeList sources={sources} onDelete={handleDeleteSource} />
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2">
+                <IngestionPanel 
+                  onAddSource={handleAddSource} 
+                  geminiService={geminiService} 
+                />
+              </div>
+              <div>
+                <KnowledgeList sources={sources} onDelete={handleDeleteSource} />
+              </div>
             </div>
           </div>
         ) : (
@@ -119,6 +163,7 @@ const App: React.FC = () => {
             <RAGChat 
               geminiService={geminiService} 
               sources={sources}
+              systemInstruction={systemInstruction}
             />
           </div>
         )}
