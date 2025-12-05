@@ -1,0 +1,5 @@
+{
+  "name": "Cheolsan Land RAG Builder",
+  "description": "A RAG (Retrieval-Augmented Generation) prototype for managing travel content. It allows manual ingestion of Blog and YouTube data, processes text into context-aware chunks, generates embeddings using Gemini, and provides a chat interface that answers questions with citations and date-awareness.",
+  "requestFramePermissions": []
+}
