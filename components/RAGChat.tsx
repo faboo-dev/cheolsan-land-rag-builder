@@ -1,5 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { ChatMessage, KnowledgeSource } from '../types';
 import { GeminiService } from '../services/gemini';
 
@@ -109,38 +111,40 @@ ${msg.text?.substring(0, 100)}...
 
             {msg.role === 'model' && (
               <div className="w-full max-w-3xl space-y-4">
-                {/* Unified Answer Bubble */}
+                {/* Unified Answer Bubble with Markdown Rendering */}
                 <div className="bg-white p-5 rounded-lg shadow-sm border border-gray-200">
-                    <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
-                      {msg.text}
+                    <div className="text-sm text-gray-800 leading-relaxed markdown-body">
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          table: ({node, ...props}) => <table className="min-w-full divide-y divide-gray-300 border border-gray-300 my-4" {...props} />,
+                          thead: ({node, ...props}) => <thead className="bg-gray-50" {...props} />,
+                          th: ({node, ...props}) => <th className="px-3 py-3.5 text-left text-xs font-bold text-gray-900 uppercase tracking-wider border-b border-gray-200" {...props} />,
+                          td: ({node, ...props}) => <td className="whitespace-pre-wrap px-3 py-4 text-sm text-gray-500 border-b border-gray-100" {...props} />,
+                          a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 hover:underline font-medium" target="_blank" rel="noopener noreferrer" {...props} />,
+                          ul: ({node, ...props}) => <ul className="list-disc ml-5 my-2 space-y-1" {...props} />,
+                          ol: ({node, ...props}) => <ol className="list-decimal ml-5 my-2 space-y-1" {...props} />,
+                          h1: ({node, ...props}) => <h1 className="text-2xl font-bold my-4 pb-2 border-b" {...props} />,
+                          h2: ({node, ...props}) => <h2 className="text-xl font-bold my-3 pb-1 border-b-gray-100 border-b" {...props} />,
+                          h3: ({node, ...props}) => <h3 className="text-lg font-bold my-2 text-gray-800" {...props} />,
+                          blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-gray-200 pl-4 italic my-4 text-gray-600" {...props} />,
+                        }}
+                      >
+                        {msg.text || ''}
+                      </ReactMarkdown>
                     </div>
 
-                    {/* Sources Footer */}
-                    {(msg.sources?.length || 0) + (msg.webSources?.length || 0) > 0 && (
-                        <div className="mt-4 pt-3 border-t flex flex-col gap-2">
-                             {/* Internal Sources */}
+                    {/* Footer Sources (Fallback/Summary) */}
+                    {((msg.sources?.length || 0) + (msg.webSources?.length || 0) > 0) && (
+                        <div className="mt-6 pt-4 border-t border-gray-100 flex flex-col gap-3">
+                             {/* Internal Sources Summary */}
                             {msg.sources && msg.sources.length > 0 && (
-                                <div className="text-xs bg-green-50 p-2 rounded border border-green-100">
-                                    <span className="font-bold text-green-800 block mb-1">📚 참고한 내 데이터:</span>
-                                    <ul className="space-y-1">
-                                    {msg.sources.map((src, i) => (
-                                        <li key={i}>
-                                        <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-green-700 hover:underline truncate block">
-                                            • {src.title} ({src.date})
-                                        </a>
-                                        </li>
-                                    ))}
-                                    </ul>
-                                </div>
-                            )}
-                            {/* Web Sources */}
-                            {msg.webSources && msg.webSources.length > 0 && (
-                                <div className="text-xs bg-blue-50 p-2 rounded border border-blue-100">
-                                    <span className="font-bold text-blue-800 block mb-1">🌐 참고한 웹 검색:</span>
+                                <div className="text-xs text-gray-500">
+                                    <span className="font-bold text-gray-700 block mb-1">📚 참고 자료 목록:</span>
                                     <div className="flex flex-wrap gap-2">
-                                    {msg.webSources.map((src, i) => (
-                                        <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                            [{src.title}]
+                                    {msg.sources.map((src, i) => (
+                                        <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" className="bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded transition-colors text-gray-700">
+                                            {src.title}
                                         </a>
                                     ))}
                                     </div>
