@@ -35,12 +35,11 @@ export class GeminiService {
         return embeddingValues;
     } catch (error) {
         console.error("Embedding Error:", error);
-        throw error;
+        throw error; // Let the caller handle UI feedback
     }
   }
 
   // --- Web Search Helper ---
-  // 단순히 최신 정보를 긁어오는 역할만 수행
   private async fetchWebInfo(query: string): Promise<{ text: string; sources: any[] }> {
     try {
       const response = await this.ai.models.generateContent({
@@ -73,8 +72,15 @@ export class GeminiService {
     webSources: any[];
     debugSnippets: DebugSnippet[]; 
   }> {
-    // 1. Retrieval (Vector Search) - 내 데이터 찾기
-    const queryEmbedding = await this.generateEmbedding(query);
+    // 1. Retrieval (Vector Search)
+    let queryEmbedding: number[] = [];
+    try {
+        queryEmbedding = await this.generateEmbedding(query);
+    } catch (e) {
+        console.error("Embedding generation failed for query", e);
+        return { answer: "질문 분석 중 오류가 발생했습니다.", sources: [], webSources: [], debugSnippets: [] };
+    }
+
     const allChunks: { chunk: ContentChunk; source: KnowledgeSource; score: number }[] = [];
 
     sources.forEach(source => {
@@ -96,10 +102,14 @@ export class GeminiService {
       sourceTitle: item.source.title
     }));
 
-    // Format Internal Context
+    // Format Internal Context with URLs for inline citation
     const internalContext = topChunks.map(item => `
-[Source: ${item.source.title} (${item.source.date})]
-${item.chunk.text}
+[SourceID: ${item.source.id}]
+Title: ${item.source.title}
+Date: ${item.source.date}
+URL: ${item.source.url}
+Type: ${item.source.type}
+Content: ${item.chunk.text}
     `).join('\n\n');
 
     const uniqueSources = Array.from(new Set(topChunks.map(tc => JSON.stringify({
@@ -109,12 +119,10 @@ ${item.chunk.text}
       type: tc.source.type
     })))).map(s => JSON.parse(s));
 
-    // 2. Fetch Web Info (병렬로 실행하지 않고 순차적으로 데이터 확보)
-    // 사용자가 '최신 정보'를 원할 수 있으므로 항상 검색 정보를 가져옵니다.
+    // 2. Fetch Web Info
     const webResult = await this.fetchWebInfo(query);
 
-    // 3. Final Synthesis (통합 답변 생성)
-    // 사용자의 systemInstruction이 답변의 구조와 형태를 완전히 결정하도록 프롬프트를 구성합니다.
+    // 3. Final Synthesis
     const finalPrompt = `
 [Task]
 Answer the user's question based on the provided "Internal Database" and "Latest Web Search Info".
@@ -122,6 +130,15 @@ Follow the [System Instruction] strictly for tone, style, and structure.
 
 [System Instruction / Persona]
 ${systemInstruction}
+
+[Formatting Rules - CRITICAL]
+1. Use **Markdown** for all formatting.
+2. **DO NOT use HTML tags** (like <div>, <table>, <span>). Use Markdown tables and lists instead.
+3. **Inline Citations & Links:**
+   - When citing Internal Database, create a clickable Markdown link: [Link Text](URL).
+   - **YouTube Timestamps:** If the source is YouTube and you mention a specific time (e.g., "at 02:30"), you MUST calculate the seconds (2*60+30 = 150) and append '&t=150' to the URL.
+     Example: "As seen in the video [Video Title @ 02:30](https://youtube.com/watch?v=xyz&t=150)..."
+4. If comparing data (e.g. prices), use a Markdown Table.
 
 [Internal Database (User's Verified Content)]
 ${internalContext}
@@ -131,11 +148,6 @@ ${webResult.text}
 
 [User Question]
 ${query}
-
-[Rules]
-1. If the System Instruction asks for a specific format (e.g., table, list, comparison), follow it.
-2. If there is a conflict between Internal DB and Web Search (e.g., prices), explicitly mention it unless instructed otherwise.
-3. Cite internal sources as [Title](URL) if possible.
     `;
 
     const response = await this.ai.models.generateContent({
