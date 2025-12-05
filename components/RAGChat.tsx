@@ -14,6 +14,8 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isDebugMode, setIsDebugMode] = useState(false); // Toggle for Analysis Mode
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -22,7 +24,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isDebugMode]); // Also scroll when debug mode changes
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,7 +49,8 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
         webAnswer: result.webAnswer,
         comparisonAnswer: result.comparisonAnswer,
         sources: result.sources,
-        webSources: result.webSources
+        webSources: result.webSources,
+        debugSnippets: result.debugSnippets // Receive debug info
       };
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
@@ -58,11 +61,44 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
     }
   };
 
+  const handleCopyReport = (msg: ChatMessage) => {
+    const report = `
+[철산랜드 RAG 튜닝 리포트]
+-------------------------
+사용자 질문: "${messages[messages.indexOf(msg) - 1]?.text}"
+
+[1. 검색된 데이터 조각 (Score 높은 순)]
+${msg.debugSnippets?.map((snip, i) => `
+${i + 1}. [${(snip.score * 100).toFixed(1)}%] ${snip.sourceTitle}
+   "${snip.text.substring(0, 100).replace(/\n/g, ' ')}..."
+`).join('')}
+
+[2. AI 답변 요약]
+- RAG: ${msg.ragAnswer?.substring(0, 50)}...
+- Web: ${msg.webAnswer?.substring(0, 50)}...
+-------------------------
+    `.trim();
+    
+    navigator.clipboard.writeText(report);
+    alert("튜닝용 리포트가 복사되었습니다! 개발자에게 붙여넣어주세요.");
+  };
+
   return (
     <div className="flex flex-col h-[600px] bg-white rounded-lg shadow-md border border-gray-200">
-      <div className="p-4 border-b bg-gray-50 rounded-t-lg">
-        <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇 테스트 (3-Step Analysis)</h2>
-        <p className="text-xs text-gray-500">내 데이터 답변 + 최신 웹 검색 + 가격/정보 교차 검증을 수행합니다.</p>
+      <div className="p-4 border-b bg-gray-50 rounded-t-lg flex justify-between items-center">
+        <div>
+            <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇 테스트</h2>
+            <p className="text-xs text-gray-500">3-Step Analysis (내 데이터 + 구글 검색 + 크로스체크)</p>
+        </div>
+        <div className="flex items-center space-x-2">
+            <span className="text-xs font-medium text-gray-600">🔍 분석 모드</span>
+            <button 
+                onClick={() => setIsDebugMode(!isDebugMode)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isDebugMode ? 'bg-primary' : 'bg-gray-200'}`}
+            >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${isDebugMode ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+        </div>
       </div>
       
       <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50">
@@ -142,6 +178,38 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
                   </div>
                 )}
 
+                {/* DEBUG PANEL (Visible only when toggle is ON) */}
+                {isDebugMode && msg.debugSnippets && (
+                    <div className="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-xs shadow-inner">
+                        <div className="flex justify-between items-center mb-2 border-b border-gray-600 pb-2">
+                            <h4 className="font-bold text-white">🔍 RAG 검색 정확도 분석 (X-Ray)</h4>
+                            <button 
+                                onClick={() => handleCopyReport(msg)}
+                                className="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded text-xs border border-gray-500"
+                            >
+                                📋 튜닝 리포트 복사
+                            </button>
+                        </div>
+                        <div className="space-y-3 max-h-60 overflow-y-auto">
+                            {msg.debugSnippets.map((snip, i) => (
+                                <div key={i} className="border-b border-gray-700 pb-2">
+                                    <div className="flex justify-between">
+                                        <span className="text-yellow-300 font-bold">Rank #{i+1}</span>
+                                        <span className={`${snip.score > 0.5 ? 'text-green-300' : 'text-red-300'}`}>
+                                            유사도: {(snip.score * 100).toFixed(1)}%
+                                        </span>
+                                    </div>
+                                    <p className="text-gray-400 mb-1">[{snip.sourceTitle}]</p>
+                                    <p className="text-gray-300 opacity-80 italic">"{snip.text}"</p>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="mt-2 text-gray-500 text-[10px]">
+                            * 유사도 70% 이상: 매우 정확함 / 50% 이하: 관련성 낮음 (데이터 보강 필요)
+                        </p>
+                    </div>
+                )}
+
               </div>
             )}
           </div>
@@ -160,7 +228,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources }) => {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="궁금한 여행 정보를 물어보세요 (예: 오사카 주유패스 가격이 올랐나요?)"
+          placeholder="궁금한 여행 정보를 물어보세요"
           className="flex-1 border border-gray-300 rounded-md px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary shadow-sm"
           disabled={isLoading}
         />
