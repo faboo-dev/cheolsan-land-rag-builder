@@ -84,11 +84,11 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // UNLEASHED MODE: match_threshold = 0.0 (No filtering), match_count = 50 (Max context)
+    // [Hybrid Search Logic Step 1] Fetch a large pool (100) to find potential matches that vector search missed
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
       match_threshold: 0.0, 
-      match_count: 50 
+      match_count: 100 // Fetch 100 candidates first
     });
 
     if (error) {
@@ -96,11 +96,38 @@ export class GeminiService {
       return { answer: "데이터베이스 검색 중 오류가 발생했습니다.", sources: [], webSources: [], debugSnippets: [] };
     }
 
-    const matchedDocs = documents || [];
+    let matchedDocs = documents || [];
+
+    // [Hybrid Search Logic Step 2] Reranking based on Keywords
+    // Extract keywords (simple whitespace split, length > 1)
+    const keywords = query.split(/\s+/).filter(w => w.length > 1);
+
+    matchedDocs = matchedDocs.map((doc: any) => {
+        let bonusScore = 0;
+        const title = (doc.metadata.title || '').toLowerCase();
+        const content = (doc.content || '').toLowerCase();
+        
+        keywords.forEach(keyword => {
+            const k = keyword.toLowerCase();
+            // Title Match: High Bonus (+0.3)
+            if (title.includes(k)) bonusScore += 0.3;
+            // Content Match: Low Bonus (+0.05)
+            if (content.includes(k)) bonusScore += 0.05;
+        });
+
+        return {
+            ...doc,
+            finalScore: doc.similarity + bonusScore
+        };
+    });
+
+    // Sort by new finalScore and take top 50
+    matchedDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
+    matchedDocs = matchedDocs.slice(0, 50);
     
     // Debug Data
     const debugSnippets: DebugSnippet[] = matchedDocs.map((doc: any) => ({
-      score: doc.similarity,
+      score: doc.finalScore, // Show re-ranked score
       text: doc.content,
       sourceTitle: doc.metadata.title
     }));
@@ -122,7 +149,6 @@ Content: ${doc.content}
     })))).map((s: any) => JSON.parse(s));
 
     // 2. Fetch Web Info (Conditional)
-    // Fix: Explicitly type the variable to avoid type inference error (never[])
     let webResult: { text: string; sources: any[] } = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
     
     if (useWebSearch) {
@@ -136,7 +162,8 @@ ${systemInstruction}
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
 1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. 
 2. Use ONLY standard Markdown syntax.
-3. **DO NOT generate a 'Reference List' or 'Sources' section at the end of your response.** The system UI already displays the source buttons.
+3. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end of your response.** 
+   The system UI already displays the source buttons at the bottom. Generating a list text is redundant and forbidden.
 4. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
 
 [CONTEXT 1: My Database (The Truth)]
@@ -157,6 +184,7 @@ ${query}
 1. Start with "## 🏰 철산랜드 데이터베이스".
 2. If Context 2 is Active, add "## 🌐 최신 AI 검색 크로스체크" at the end. If Disabled, SKIP it.
 3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
+4. **STOP** after finishing the content. Do not add a "Sources" list.
 `;
 
     const response = await this.ai.models.generateContent({
