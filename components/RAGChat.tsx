@@ -9,11 +9,12 @@ interface Props {
   geminiService: GeminiService;
   sources: KnowledgeSource[];
   systemInstruction: string;
+  isEmbed?: boolean;
 }
 
-const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction }) => {
+const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction, isEmbed = false }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'model', text: '안녕하세요! 철산랜드 AI입니다. \n설정하신 페르소나와 지침에 따라 자유롭게 답변해드립니다.\n궁금한 점을 물어보세요!' }
+    { role: 'model', text: '안녕하세요! 철산랜드 AI입니다. \n궁금한 여행 정보를 물어보세요!' }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -82,22 +83,25 @@ ${msg.text?.substring(0, 100)}...
   };
 
   return (
-    <div className="flex flex-col h-[600px] bg-white rounded-lg shadow-md border border-gray-200">
-      <div className="p-4 border-b bg-gray-50 rounded-t-lg flex justify-between items-center">
-        <div>
-            <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇</h2>
-            <p className="text-xs text-gray-500">사용자 정의 페르소나 적용됨</p>
+    <div className={`flex flex-col ${isEmbed ? 'h-screen' : 'h-[600px] rounded-lg shadow-md border border-gray-200'} bg-white`}>
+      {/* Chat Header */}
+      {!isEmbed && (
+        <div className="p-4 border-b bg-gray-50 rounded-t-lg flex justify-between items-center">
+            <div>
+                <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇</h2>
+                <p className="text-xs text-gray-500">사용자 정의 페르소나 적용됨</p>
+            </div>
+            <div className="flex items-center space-x-2">
+                <span className="text-xs font-medium text-gray-600">🔍 분석 모드</span>
+                <button 
+                    onClick={() => setIsDebugMode(!isDebugMode)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isDebugMode ? 'bg-primary' : 'bg-gray-200'}`}
+                >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${isDebugMode ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+            </div>
         </div>
-        <div className="flex items-center space-x-2">
-            <span className="text-xs font-medium text-gray-600">🔍 분석 모드</span>
-            <button 
-                onClick={() => setIsDebugMode(!isDebugMode)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isDebugMode ? 'bg-primary' : 'bg-gray-200'}`}
-            >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${isDebugMode ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-        </div>
-      </div>
+      )}
       
       <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50">
         {messages.map((msg, idx) => (
@@ -175,8 +179,8 @@ ${msg.text?.substring(0, 100)}...
                     )}
                 </div>
 
-                {/* DEBUG PANEL */}
-                {isDebugMode && msg.debugSnippets && (
+                {/* DEBUG PANEL (Only show in Normal Mode, hide in Embed Mode unless forced) */}
+                {(!isEmbed && isDebugMode && msg.debugSnippets) && (
                     <div className="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-xs shadow-inner mt-2">
                         <div className="flex justify-between items-center mb-2 border-b border-gray-600 pb-2">
                             <h4 className="font-bold text-white">🔍 검색 데이터 분석 (X-Ray)</h4>
@@ -206,7 +210,7 @@ ${msg.text?.substring(0, 100)}...
         {isLoading && (
             <div className="flex items-center space-x-2 p-4 bg-white rounded-lg shadow-sm w-fit">
                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-               <span className="text-sm text-gray-500">지침에 따라 분석 및 답변 생성 중... (웹 검색 포함)</span>
+               <span className="text-sm text-gray-500">답변 생성 중...</span>
             </div>
         )}
         <div ref={messagesEndRef} />
