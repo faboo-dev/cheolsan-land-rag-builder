@@ -14,9 +14,18 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'manage' | 'chat'>('manage');
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [systemInstruction, setSystemInstruction] = useState('');
+  const [isEmbedMode, setIsEmbedMode] = useState(false);
   
   // Initialize Gemini Service
   const geminiService = useMemo(() => new GeminiService(), []);
+
+  // Check for Embed Mode on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mode') === 'embed') {
+      setIsEmbedMode(true);
+    }
+  }, []);
 
   // Load from LocalStorage on mount
   useEffect(() => {
@@ -61,6 +70,21 @@ const App: React.FC = () => {
     alert("AI 페르소나 및 답변 구조 설정이 저장되었습니다!");
   };
 
+  // --- WIDGET MODE RENDER ---
+  if (isEmbedMode) {
+    return (
+      <div className="h-screen w-full bg-white">
+        <RAGChat 
+          geminiService={geminiService} 
+          sources={sources}
+          systemInstruction={systemInstruction}
+          isEmbed={true}
+        />
+      </div>
+    );
+  }
+
+  // --- NORMAL MODE RENDER ---
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
