@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import IngestionPanel from './components/IngestionPanel';
 import KnowledgeList from './components/KnowledgeList';
@@ -9,21 +8,33 @@ import { GeminiService } from './services/gemini';
 // Use local storage to simulate a database for this prototype
 const STORAGE_KEY = 'cheolsan_rag_db';
 const INSTRUCTION_KEY = 'cheolsan_rag_instruction';
+const AUTH_SESSION_KEY = 'cheolsan_rag_auth';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'manage' | 'chat'>('manage');
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [systemInstruction, setSystemInstruction] = useState('');
+  
+  // Modes & Auth States
   const [isEmbedMode, setIsEmbedMode] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
   
   // Initialize Gemini Service
   const geminiService = useMemo(() => new GeminiService(), []);
 
-  // Check for Embed Mode on mount
+  // Check for Embed Mode & Auth Session on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'embed') {
       setIsEmbedMode(true);
+      // Embed mode bypasses authentication for Chat view
+    } else {
+      // Check if user already logged in this session
+      const savedAuth = sessionStorage.getItem(AUTH_SESSION_KEY);
+      if (savedAuth === 'true') {
+        setIsAuthenticated(true);
+      }
     }
   }, []);
 
@@ -70,7 +81,21 @@ const App: React.FC = () => {
     alert("AI 페르소나 및 답변 구조 설정이 저장되었습니다!");
   };
 
-  // --- WIDGET MODE RENDER ---
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    // @ts-ignore
+    const correctPassword = process.env.ADMIN_PASSWORD;
+    
+    if (passwordInput === correctPassword) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem(AUTH_SESSION_KEY, 'true');
+    } else {
+      alert("비밀번호가 올바르지 않습니다.");
+      setPasswordInput('');
+    }
+  };
+
+  // --- 1. WIDGET MODE RENDER (No Auth Required) ---
   if (isEmbedMode) {
     return (
       <div className="h-screen w-full bg-white">
@@ -84,7 +109,40 @@ const App: React.FC = () => {
     );
   }
 
-  // --- NORMAL MODE RENDER ---
+  // --- 2. LOGIN SCREEN (Auth Required) ---
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
+        <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
+          <div className="text-center mb-6">
+            <span className="text-4xl">🎡</span>
+            <h1 className="text-2xl font-bold text-gray-800 mt-2">Cheolsan Land Admin</h1>
+            <p className="text-sm text-gray-500 mt-1">관리자 접속을 위해 비밀번호를 입력하세요.</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="비밀번호 입력"
+                className="w-full px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary"
+                autoFocus
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-primary text-white py-3 rounded font-bold hover:bg-secondary transition-colors"
+            >
+              접속하기
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // --- 3. ADMIN DASHBOARD RENDER (Authenticated) ---
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
@@ -94,8 +152,19 @@ const App: React.FC = () => {
             <span className="text-2xl">🎡</span>
             <h1 className="text-2xl font-bold">Cheolsan Land RAG Builder</h1>
           </div>
-          <div className="text-sm bg-secondary px-3 py-1 rounded">
-             Prototype v0.2
+          <div className="flex items-center space-x-4">
+            <div className="text-sm bg-secondary px-3 py-1 rounded">
+               Prototype v0.3
+            </div>
+            <button 
+              onClick={() => {
+                setIsAuthenticated(false);
+                sessionStorage.removeItem(AUTH_SESSION_KEY);
+              }}
+              className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded border border-gray-600"
+            >
+              로그아웃
+            </button>
           </div>
         </div>
       </header>
