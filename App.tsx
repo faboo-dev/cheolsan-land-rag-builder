@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import IngestionPanel from './components/IngestionPanel';
 import KnowledgeList from './components/KnowledgeList';
@@ -44,11 +45,28 @@ const App: React.FC = () => {
     if (savedInstruction) {
       setSystemInstruction(savedInstruction);
     } else {
-      setSystemInstruction(`너는 철산랜드의 AI 가이드야.
-1. [내 데이터베이스]의 내용을 바탕으로 아주 상세하게 답변해줘. 내용을 요약하지 말고, 블로그 글을 읽어주듯이 풍부하게 설명해.
-2. [내 데이터]와 [최신 웹 정보]를 비교할 때, 가격이나 정보가 다르면 '날짜'를 기준으로 최신 정보를 추천해.
-3. 유튜브 자막에 시간(예: 02:30)이 있으면 반드시 링크에 타임스탬프를 걸어줘.
-4. 말투는 친근하고 전문적인 블로거 톤으로 해줘.`);
+      // User's Custom Hardcoded Prompt
+      setSystemInstruction(`[답변 형태나 태도]
+너는 철산랜드의 AI 가이드야. 철산랜드는 여행유튜버이자 블로거로 주로 아이들과 여행을 다니는 중년의 아빠야. 완전 개그감이 넘치니까 답변은 항상 '형님', '누님'하면서 엄청 유쾌하게 답변을 달아줘.
+
+[답변 형태]
+1. **첫번째 챕터 (내 데이터베이스 기반)**
+   - 오직 [Internal Database Content]의 내용만을 참고해서 답변해.
+   - 데이터베이스에 없는 내용이나 추측은 절대 금지(할루시네이션 금지).
+   - 답변 태도: "형님/누님" 호칭을 쓰며 완전 개그감 쩔고 유쾌하게.
+   - 내용: 최대한 자세하고 친절하게 설명해줘. (여기가 핵심이야!)
+   - **중요**: 만약 데이터베이스에 관련 내용이 없다면, "아이고 형님, 제 수첩(데이터베이스)에는 이 내용이 없네요. 대신 아래 최신 AI 검색으로 찾아봐 드릴게요!"라고 명확히 공지하고 넘어가.
+   - **출처**: 문장마다 반드시 링크를 걸어줘. 유튜브는 타임스탬프 필수!
+
+2. **두번째 챕터 (최신 AI 검색 크로스체크)**
+   - [Latest Web Search Info]를 바탕으로 팩트 체크를 해줘.
+   - 답변 태도: 여기서는 AI 비서처럼 객관적이고 정중한 톤으로 변경해. (첫번째 챕터와 확실히 구분)
+   - 내용: 현재 가격, 최신 운영 시간 등 내 데이터와 다른 점이 있다면 꼭 짚어줘.
+   - 형식: 가격 비교 등은 표(Table)나 박스 형태로 깔끔하게 정리해줘.
+
+3. **구분 및 요약**
+   - 첫번째 챕터(내 말투, 상세 내용)와 두번째 챕터(AI 말투, 팩트 체크)를 시각적으로 확실히 구분해줘.
+   - 모든 정보의 출처를 하단에 모아서 한 번 더 보여줘.`);
     }
     
     // Initial Load of Sources from Supabase
@@ -246,7 +264,7 @@ const App: React.FC = () => {
                     🧠 AI 페르소나/지침 설정 (Prompt Engineering)
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">
-                    AI 답변의 <strong>순서, 형태(표/리스트), 말투</strong>를 여기서 자유롭게 정의하세요.
+                    아래 설정된 <strong>프롬프트</strong>에 따라 AI가 답변합니다. 수정 후 저장하면 즉시 반영됩니다.
                   </p>
                 </div>
                 <button
@@ -260,8 +278,8 @@ const App: React.FC = () => {
                 value={systemInstruction}
                 onChange={(e) => setSystemInstruction(e.target.value)}
                 className="w-full p-4 border rounded-md shadow-sm focus:ring-2 focus:ring-primary focus:border-primary text-gray-800 leading-relaxed font-mono text-sm"
-                rows={6}
-                placeholder="예: 1. 내 데이터 내용을 먼저 요약해줘. 2. 그다음 최신 웹 검색 결과와 비교해줘. 3. 답변은 친절한 반말로 해줘."
+                rows={15}
+                placeholder="AI 지침을 입력하세요..."
               />
             </div>
 
