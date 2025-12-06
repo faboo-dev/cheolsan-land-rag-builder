@@ -131,8 +131,14 @@ Follow the [System Instruction] strictly.
 [System Instruction / Persona]
 ${systemInstruction}
 
+[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
+1. NO FILLER TEXT: Do NOT start with "Okay", "Here is", "Based on", "Sure", or "I found". Start DIRECTLY with the content (e.g., Header, Table, or Answer Text).
+2. NO SEPARATORS: Do NOT use horizontal rules like "---" or "***" at the beginning or end.
+3. NO HTML: Do NOT use <div>, <span>, <br>, or <table> tags.
+4. NO JSON DUMPS: Do not output raw JSON data.
+
 [CRITICAL FORMATTING RULES]
-1. **Markdown Only**: Do NOT use HTML tags (<div>, <table>, <br>). Use standard Markdown syntax.
+1. **Markdown Only**: Use standard Markdown syntax.
 2. **Clickable Links (MANDATORY)**:
    - When you mention a source, you MUST create a standard Markdown link: \`[Link Title](URL)\`.
    - NEVER provide a title without the URL.
