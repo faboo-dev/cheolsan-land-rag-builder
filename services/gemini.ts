@@ -83,9 +83,11 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
+    // CRITICAL UPDATE: Set match_threshold to 0.0 to retrieve ALL potentially relevant chunks.
+    // Let the LLM filter out irrelevant info. This fixes the issue of missing specific price/discount info.
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.3, 
+      match_threshold: 0.0, 
       match_count: 30 // High count for context
     });
 
@@ -132,16 +134,20 @@ You are a 'RAG' agent. Your goal is to answer the user's question by strictly fo
 ${systemInstruction}
 
 [CONTEXT 1: Internal Database Content (Primary Source)]
+* This data comes from the user's database. Use this for "Chapter 1".
+* Pay close attention to numerical values, prices (e.g., 9999 won), and discounts.
+* If this section is empty or irrelevant, you MUST admit it in Chapter 1 as per instructions.
 ${internalContext}
 
 [CONTEXT 2: Latest Web Search Info (Secondary Source)]
+* This data comes from Google Search. Use this for "Chapter 2".
 ${webResult.text}
 
 [User Question]
 ${query}
 
 [Formatting Guidelines]
-1. **Markdown Only**: Use standard Markdown syntax (bold, list, tables).
+1. **Markdown Only**: Use standard Markdown syntax.
 2. **Clickable Links (MANDATORY)**:
    - Always format links as: \`[Link Title](URL)\`.
    - Do NOT just write "URL" or "[Link]".
@@ -152,11 +158,10 @@ ${query}
      - Example Output: "[Video Title @ 12:30](https://youtu.be/xyz?t=750)"
    - IF NO TIMESTAMP found, just link the video normally.
 
-[Constraints]
-- Respect the persona (e.g., "Hyungnim", funny tone) defined in the System Instruction.
-- Do NOT use filler phrases like "Okay, here is the answer" unless it fits the persona.
-- NO HTML tags.
-- NO Hallucinations: If [Internal Database Content] is empty or irrelevant for Chapter 1, explicitly state it as per instructions.
+[Final Constraints]
+- ABSOLUTELY NO HALLUCINATIONS. If info is not in Context 1, say so.
+- Strictly separate Chapter 1 and Chapter 2 as requested.
+- Use the requested persona (funny/Hyungnim) for Chapter 1 and objective tone for Chapter 2.
     `;
 
     const response = await this.ai.models.generateContent({
