@@ -79,13 +79,13 @@ export class GeminiService {
     let vectorDocs: any[] = [];
     let keywordDocs: any[] = [];
 
-    // --- Execution A: Vector Search ---
+    // --- Execution A: Vector Search (Wide Net) ---
     try {
         const queryEmbedding = await this.generateEmbedding(query);
         const { data: documents, error } = await supabase.rpc('match_documents', {
             query_embedding: queryEmbedding,
             match_threshold: 0.0, 
-            match_count: 50 // Fetch top 50 semantically similar docs
+            match_count: 100 // Fetch 100 to catch everything initially
         });
         if (!error && documents) vectorDocs = documents;
     } catch (e) {
@@ -97,19 +97,17 @@ export class GeminiService {
         // Extract meaningful keywords (length > 1) to fire the harpoon
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
         
-        // Pick top 3 longest keywords to avoid overly broad queries (e.g. searching for "the")
+        // Pick top 3 longest keywords to avoid overly broad queries
         const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 3);
 
         if (targetKeywords.length > 0) {
-            // Create an OR filter for Title or Content containing the keyword
-            // Syntax: column.ilike.%keyword%
             const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
             
             const { data: kDocs, error: kError } = await supabase
                 .from('documents')
-                .select('id, content, metadata') // No similarity score here
+                .select('id, content, metadata') 
                 .or(conditions)
-                .limit(20); // Force fetch top 20 matches containing keywords
+                .limit(30); // Keyword match 30 docs
             
             if (!kError && kDocs) keywordDocs = kDocs;
         }
@@ -118,15 +116,12 @@ export class GeminiService {
     }
 
     // --- Merge & Deduplicate ---
-    // Combine results from both strategies. Use a Map to remove duplicates by ID.
     const combinedDocsMap = new Map();
 
-    // Add Vector Results (They have similarity scores)
     vectorDocs.forEach(doc => {
         combinedDocsMap.set(doc.id, { ...doc, origin: 'vector', baseScore: doc.similarity });
     });
 
-    // Add Keyword Results (They don't have similarity, so we give them a base score of 0.5)
     keywordDocs.forEach(doc => {
         if (!combinedDocsMap.has(doc.id)) {
             combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
@@ -135,28 +130,34 @@ export class GeminiService {
 
     let allDocs = Array.from(combinedDocsMap.values());
 
-    // --- Reranking Logic (Hybrid Score) ---
-    // Now we apply the "Bonus Points" to strictly order them.
+    // --- Smart Reranking Logic (Hybrid Score) ---
     const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+    const now = new Date();
 
     allDocs = allDocs.map((doc: any) => {
         let bonusScore = 0;
         const title = (doc.metadata.title || '').toLowerCase();
         const content = (doc.content || '').toLowerCase();
         
+        // 1. Keyword Relevance
         keywords.forEach(keyword => {
             const k = keyword.toLowerCase();
-            // [CRITICAL] TITLE MATCH NUCLEAR BOOST (+10.0)
-            // If the user asks for "Bohol" and title has "Bohol", this gets +10.0.
-            // Vector scores are usually 0.7~0.8. This makes it impossible to beat.
-            if (title.includes(k)) {
-                bonusScore += 10.0; 
-            } 
-            // Content Match Boost (+1.0)
-            if (content.includes(k)) {
+            if (title.includes(k)) bonusScore += 10.0; // Title Match: Huge Boost
+            if (content.includes(k)) bonusScore += 1.0; // Content Match: Minor Boost
+        });
+
+        // 2. Recency Scoring (Freshness Boost)
+        if (doc.metadata.date) {
+            const docDate = new Date(doc.metadata.date);
+            const diffTime = Math.abs(now.getTime() - docDate.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffDays <= 180) { // < 6 Months
+                bonusScore += 3.0;
+            } else if (diffDays <= 365) { // < 1 Year
                 bonusScore += 1.0;
             }
-        });
+        }
 
         return {
             ...doc,
@@ -164,15 +165,16 @@ export class GeminiService {
         };
     });
 
-    // Sort by finalScore descending and take Top 50
+    // Sort by finalScore and CUTOFF to Top 25 (Smart Filtering)
+    // Reduces noise and improves speed
     allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
-    const finalDocs = allDocs.slice(0, 50);
+    const finalDocs = allDocs.slice(0, 25);
     
     // Debug Data
     const debugSnippets: DebugSnippet[] = finalDocs.map((doc: any) => ({
       score: doc.finalScore, 
       text: doc.content,
-      sourceTitle: `[${doc.origin === 'keyword' ? '작살검색' : '유사도'}] ${doc.metadata.title}`
+      sourceTitle: `[${doc.origin === 'keyword' ? '키워드' : '유사도'}] ${doc.metadata.title} (${doc.metadata.date})`
     }));
 
     // Format Internal Context
@@ -225,7 +227,7 @@ ${query}
 1. Start with "## 🏰 철산랜드 데이터베이스".
 2. If Context 2 is Active (Web Search ON), add "## 🌐 최신 AI 검색 크로스체크" section at the end. If Disabled, SKIP it.
 3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
-4. **STOP** after finishing the content.
+4. **STOP** after finishing the content. DO NOT add a list of sources.
 `;
 
     const response = await this.ai.models.generateContent({
