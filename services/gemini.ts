@@ -1,7 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { DebugSnippet } from "../types";
-import "./supabase"; // Ensure relative import for module resolution
 import { supabase } from "./supabase";
 
 // Model constants
@@ -67,7 +66,6 @@ export class GeminiService {
   }
 
   // --- Main Orchestrator (Supabase Integrated) ---
-  // Added useWebSearch parameter for optional cross-check
   async getAnswer(query: string, systemInstruction: string, useWebSearch: boolean): Promise<{ 
     answer: string; 
     sources: any[];
@@ -84,10 +82,10 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // [Hybrid Search Logic Step 1] Fetch a LARGE pool (100) to ensure we catch keyword matches even if vector score is low
+    // Fetch 100 documents to capture potiential matches that have low vector score but high keyword relevance
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.0, 
+      match_threshold: 0.0, // No threshold to catch everything
       match_count: 100 
     });
 
@@ -98,8 +96,8 @@ export class GeminiService {
 
     let matchedDocs = documents || [];
 
-    // [Hybrid Search Logic Step 2] Aggressive Keyword Boosting (Reranking)
-    // Extract keywords: Split by space, filter out short words, and special chars
+    // [Hybrid Search Logic] Keyword Boosting (Reranking)
+    // Extract meaningful keywords (length > 1)
     const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
 
     matchedDocs = matchedDocs.map((doc: any) => {
@@ -109,21 +107,16 @@ export class GeminiService {
         
         keywords.forEach(keyword => {
             const k = keyword.toLowerCase();
-            
-            // SUPER AGGRESSIVE TITLE MATCH
-            // If the keyword appears in the TITLE, this is likely the exact document the user wants.
-            // Give a massive boost to override vector similarity "vibe" checks.
+            // [CRITICAL UPDATE] TITLE MATCH NUCLEAR BOOST
+            // If the keyword is in the title, add +10.0 points.
+            // This ensures document with the keyword in title ALWAYS ranks #1 regardless of vector score.
             if (title.includes(k)) {
-                bonusScore += 0.8; // Huge boost
+                bonusScore += 10.0; 
             } 
-            
-            // Content Match
-            // Count occurrences to give more weight to documents that mention the keyword frequently
-            const regex = new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-            const count = (content.match(regex) || []).length;
-            
-            if (count > 0) {
-                bonusScore += 0.1 + (count * 0.02); // Base boost + frequency boost
+            // Content Match Boost
+            // If the keyword is in the content, add +1.0 point.
+            if (content.includes(k)) {
+                bonusScore += 1.0;
             }
         });
 
@@ -133,13 +126,13 @@ export class GeminiService {
         };
     });
 
-    // Sort by new finalScore and take top 50
+    // Sort by finalScore and take top 50
     matchedDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
     matchedDocs = matchedDocs.slice(0, 50);
     
     // Debug Data
     const debugSnippets: DebugSnippet[] = matchedDocs.map((doc: any) => ({
-      score: doc.finalScore, // Show re-ranked score
+      score: doc.finalScore, 
       text: doc.content,
       sourceTitle: doc.metadata.title
     }));
@@ -172,17 +165,14 @@ Content: ${doc.content}
 ${systemInstruction}
 
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
-1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. 
-2. Use ONLY standard Markdown syntax.
-3. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end of your response.** 
-   The system UI already displays the source buttons at the bottom. Generating a list text is redundant and forbidden.
-4. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
+1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
+2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end.** 
+3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
+4. DO NOT add filler text like "Okay, here is the info". Start directly with the header.
 
 [CONTEXT 1: My Database (The Truth)]
 * Use this for "## 🏰 철산랜드 데이터베이스".
-* Provide EXTREME detail.
-* IMPORTANT: If the user asks for specific values (prices, time) found here, prioritize this data.
-* If specific keywords from the user question appear in these documents, focus heavily on those documents.
+* If specific keywords from the user question appear here, prioritize this data.
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
@@ -195,9 +185,9 @@ ${query}
 
 [Format Guide]
 1. Start with "## 🏰 철산랜드 데이터베이스".
-2. If Context 2 is Active, add "## 🌐 최신 AI 검색 크로스체크" at the end. If Disabled, SKIP it.
+2. If Context 2 is Active (Web Search ON), add "## 🌐 최신 AI 검색 크로스체크" section at the end. If Disabled, SKIP it.
 3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
-4. **STOP** after finishing the content. Do not add a "Sources" list.
+4. **STOP** after finishing the content.
 `;
 
     const response = await this.ai.models.generateContent({
