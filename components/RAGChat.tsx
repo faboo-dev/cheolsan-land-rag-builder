@@ -12,7 +12,6 @@ interface Props {
   isEmbed?: boolean;
 }
 
-// 'sources' removed from destructuring to fix unused variable error
 const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = false }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', text: '안녕하세요! 철산랜드 AI입니다. \n궁금한 여행 정보를 물어보세요!' }
@@ -20,6 +19,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
+  const [useWebSearch, setUseWebSearch] = useState(false); // Default: Off for speed
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -41,7 +41,8 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
     setIsLoading(true);
 
     try {
-      const result = await geminiService.getAnswer(userMessage.text!, systemInstruction);
+      // Pass useWebSearch state to service
+      const result = await geminiService.getAnswer(userMessage.text!, systemInstruction, useWebSearch);
       
       const aiMessage: ChatMessage = { 
         role: 'model', 
@@ -64,6 +65,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
 [철산랜드 RAG 튜닝 리포트]
 -------------------------
 질문: "${messages[messages.indexOf(msg) - 1]?.text}"
+웹검색 사용: ${useWebSearch ? 'ON' : 'OFF'}
 
 [페르소나]
 ${systemInstruction}
@@ -112,13 +114,11 @@ ${msg.text?.substring(0, 100)}...
 
             {msg.role === 'model' && (
               <div className="w-full max-w-3xl space-y-4">
-                {/* Unified Answer Bubble with Markdown Rendering */}
                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                     <div className="text-sm text-gray-800 leading-relaxed markdown-body">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
                         components={{
-                          // Table Styling
                           table: ({node, ...props}) => (
                             <div className="overflow-x-auto my-4 rounded-lg border border-gray-200">
                               <table className="min-w-full divide-y divide-gray-200" {...props} />
@@ -129,8 +129,6 @@ ${msg.text?.substring(0, 100)}...
                           tr: ({node, ...props}) => <tr className="even:bg-gray-50 hover:bg-gray-100 transition-colors" {...props} />,
                           th: ({node, ...props}) => <th className="px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider border-b" {...props} />,
                           td: ({node, ...props}) => <td className="px-4 py-3 text-sm text-gray-600 whitespace-pre-wrap" {...props} />,
-                          
-                          // Link Styling
                           a: ({node, ...props}) => (
                             <a 
                               className="text-blue-600 hover:text-blue-800 hover:underline font-semibold transition-colors bg-blue-50 px-1 rounded" 
@@ -139,8 +137,6 @@ ${msg.text?.substring(0, 100)}...
                               {...props} 
                             />
                           ),
-                          
-                          // Other Elements
                           ul: ({node, ...props}) => <ul className="list-disc ml-5 my-2 space-y-1 text-gray-700" {...props} />,
                           ol: ({node, ...props}) => <ol className="list-decimal ml-5 my-2 space-y-1 text-gray-700" {...props} />,
                           h1: ({node, ...props}) => <h1 className="text-2xl font-bold my-4 pb-2 border-b text-gray-900" {...props} />,
@@ -154,10 +150,8 @@ ${msg.text?.substring(0, 100)}...
                       </ReactMarkdown>
                     </div>
 
-                    {/* Footer Sources (Fallback/Summary) */}
                     {((msg.sources?.length || 0) + (msg.webSources?.length || 0) > 0) && (
                         <div className="mt-8 pt-4 border-t border-gray-100 flex flex-col gap-3 bg-gray-50 -mx-6 -mb-6 p-6">
-                             {/* Internal Sources Summary */}
                             {msg.sources && msg.sources.length > 0 && (
                                 <div className="text-xs text-gray-500">
                                     <span className="font-bold text-gray-700 block mb-2 flex items-center">
@@ -176,7 +170,6 @@ ${msg.text?.substring(0, 100)}...
                     )}
                 </div>
 
-                {/* DEBUG PANEL (Only show in Normal Mode, hide in Embed Mode unless forced) */}
                 {(!isEmbed && isDebugMode && msg.debugSnippets) && (
                     <div className="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-xs shadow-inner mt-2">
                         <div className="flex justify-between items-center mb-2 border-b border-gray-600 pb-2">
@@ -213,23 +206,38 @@ ${msg.text?.substring(0, 100)}...
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSend} className="p-4 border-t bg-white flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="질문을 입력하세요..."
-          className="flex-1 border border-gray-300 rounded-md px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary shadow-sm"
-          disabled={isLoading}
-        />
-        <button 
-          type="submit" 
-          disabled={isLoading}
-          className="bg-primary text-white px-6 py-3 rounded-md hover:bg-secondary disabled:bg-gray-300 font-bold shadow-sm transition-colors"
-        >
-          전송
-        </button>
-      </form>
+      <div className="bg-white border-t p-2">
+        {/* Speed Option Checkbox */}
+        <div className="px-4 py-1 flex items-center">
+            <label className="flex items-center space-x-2 cursor-pointer text-sm text-gray-600 hover:text-primary">
+                <input 
+                    type="checkbox" 
+                    checked={useWebSearch}
+                    onChange={(e) => setUseWebSearch(e.target.checked)}
+                    className="form-checkbox h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary"
+                />
+                <span className="font-semibold">🌐 최신 실시간 정보 크로스체크 (속도 느림)</span>
+            </label>
+        </div>
+
+        <form onSubmit={handleSend} className="p-2 flex gap-2">
+            <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="질문을 입력하세요..."
+            className="flex-1 border border-gray-300 rounded-md px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary shadow-sm"
+            disabled={isLoading}
+            />
+            <button 
+            type="submit" 
+            disabled={isLoading}
+            className="bg-primary text-white px-6 py-3 rounded-md hover:bg-secondary disabled:bg-gray-300 font-bold shadow-sm transition-colors"
+            >
+            전송
+            </button>
+        </form>
+      </div>
     </div>
   );
 };
