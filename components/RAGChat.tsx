@@ -33,10 +33,9 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction, i
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
-    if (sources.length === 0) {
-      alert("데이터베이스가 비어있습니다. 먼저 데이터를 추가해주세요.");
-      return;
-    }
+    
+    // Supabase를 사용하므로 로컬 sources 체크는 생략 가능하거나, 최소한의 검증만 수행
+    // if (sources.length === 0) { ... } // 이 부분은 이제 선택사항입니다. DB에 데이터가 있다면 sources state와 무관하게 검색됩니다.
 
     const userMessage: ChatMessage = { role: 'user', text: input };
     setMessages(prev => [...prev, userMessage]);
@@ -44,7 +43,8 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction, i
     setIsLoading(true);
 
     try {
-      const result = await geminiService.getAnswer(userMessage.text!, sources, systemInstruction);
+      // sources 인자 제거됨
+      const result = await geminiService.getAnswer(userMessage.text!, systemInstruction);
       
       const aiMessage: ChatMessage = { 
         role: 'model', 
