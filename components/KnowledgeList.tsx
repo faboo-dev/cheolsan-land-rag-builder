@@ -1,28 +1,51 @@
 
 import React, { useState } from 'react';
 import { KnowledgeSource, SourceType } from '../types';
+import { supabase } from '../services/supabase';
 
 interface Props {
-  sources: KnowledgeSource[];
+  sources: KnowledgeSource[]; // Now derived from DB metadata
   onDelete: (id: string) => void;
 }
 
 const KnowledgeList: React.FC<Props> = ({ sources, onDelete }) => {
   const [viewingSource, setViewingSource] = useState<KnowledgeSource | null>(null);
+  const [isContentLoading, setIsContentLoading] = useState(false);
+  const [fullContent, setFullContent] = useState('');
 
   const handleExportSummary = () => {
       const summary = sources.map(s => 
-        `[${s.type}] ${s.title} (${s.date}) - URL: ${s.url} - Chunks: ${s.chunks.length}`
+        `[${s.type}] ${s.title} (${s.date}) - URL: ${s.url}`
       ).join('\n');
       
       navigator.clipboard.writeText(summary);
       alert(`총 ${sources.length}개의 데이터 목록이 복사되었습니다.`);
   };
 
+  const handleViewContent = async (source: KnowledgeSource) => {
+    setIsContentLoading(true);
+    setViewingSource(source);
+    setFullContent('불러오는 중...');
+
+    // Fetch all chunks for this source to reconstruct content
+    const { data, error } = await supabase
+        .from('documents')
+        .select('content')
+        .contains('metadata', { sourceId: source.id })
+        .order('id', { ascending: true });
+
+    if (error || !data) {
+        setFullContent('내용을 불러오는데 실패했습니다.');
+    } else {
+        setFullContent(data.map(d => d.content).join('\n\n'));
+    }
+    setIsContentLoading(false);
+  };
+
   if (sources.length === 0) {
     return (
       <div className="text-center p-8 text-gray-500">
-        저장된 지식이 없습니다. 왼쪽 패널에서 데이터를 추가해주세요.
+        저장된 지식이 없습니다. 왼쪽 패널에서 데이터를 추가해주세요. (수파베이스)
       </div>
     );
   }
@@ -51,16 +74,16 @@ const KnowledgeList: React.FC<Props> = ({ sources, onDelete }) => {
                     {source.type === SourceType.YOUTUBE ? 'YouTube' : 'Blog'}
                   </span>
                   <h3 className="font-bold text-gray-800 leading-tight mb-1 truncate">{source.title}</h3>
-                  <p className="text-xs text-gray-500 mb-2">{source.date} • {source.chunks.length}개 조각(Chunks)</p>
+                  <p className="text-xs text-gray-500 mb-2">{source.date}</p>
                   <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline">
                     원본 링크 열기
                   </a>
                 </div>
                 <div className="flex flex-col space-y-2">
                   <button 
-                    onClick={() => setViewingSource(source)}
+                    onClick={() => handleViewContent(source)}
                     className="text-blue-400 hover:text-blue-600 p-1 border border-blue-100 rounded bg-blue-50"
-                    title="내용 확인 (원본 보기)"
+                    title="내용 확인 (DB 로드)"
                   >
                     👁️ 보기
                   </button>
@@ -95,7 +118,7 @@ const KnowledgeList: React.FC<Props> = ({ sources, onDelete }) => {
               </button>
             </div>
             <div className="p-6 overflow-y-auto bg-gray-50 font-mono text-sm leading-relaxed whitespace-pre-wrap text-gray-700">
-              {viewingSource.originalContent}
+               {isContentLoading ? '데이터베이스에서 내용을 불러오는 중입니다...' : fullContent}
             </div>
             <div className="p-4 border-t bg-gray-50 rounded-b-lg text-right">
               <button 
