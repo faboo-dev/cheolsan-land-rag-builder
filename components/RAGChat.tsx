@@ -12,7 +12,8 @@ interface Props {
   isEmbed?: boolean;
 }
 
-const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction, isEmbed = false }) => {
+// 'sources' removed from destructuring to fix unused variable error
+const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = false }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', text: '안녕하세요! 철산랜드 AI입니다. \n궁금한 여행 정보를 물어보세요!' }
   ]);
@@ -34,16 +35,12 @@ const RAGChat: React.FC<Props> = ({ geminiService, sources, systemInstruction, i
     e.preventDefault();
     if (!input.trim()) return;
     
-    // Supabase를 사용하므로 로컬 sources 체크는 생략 가능하거나, 최소한의 검증만 수행
-    // if (sources.length === 0) { ... } // 이 부분은 이제 선택사항입니다. DB에 데이터가 있다면 sources state와 무관하게 검색됩니다.
-
     const userMessage: ChatMessage = { role: 'user', text: input };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
 
     try {
-      // sources 인자 제거됨
       const result = await geminiService.getAnswer(userMessage.text!, systemInstruction);
       
       const aiMessage: ChatMessage = { 
