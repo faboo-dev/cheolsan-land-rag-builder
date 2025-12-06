@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { SourceType, KnowledgeSource } from '../types';
+import { SourceType } from '../types';
 import { smartChunking } from '../utils/textProcessing';
 import { GeminiService } from '../services/gemini';
 import { supabase } from '../services/supabase';
