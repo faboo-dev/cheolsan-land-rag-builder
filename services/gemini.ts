@@ -1,7 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { KnowledgeSource, ContentChunk, DebugSnippet } from "../types";
-import { cosineSimilarity } from "../utils/textProcessing";
+import { supabase } from "./supabase";
 
 // Model constants
 const EMBEDDING_MODEL = "text-embedding-004";
@@ -35,7 +35,7 @@ export class GeminiService {
         return embeddingValues;
     } catch (error) {
         console.error("Embedding Error:", error);
-        throw error; // Let the caller handle UI feedback
+        throw error;
     }
   }
 
@@ -65,14 +65,14 @@ export class GeminiService {
     }
   }
 
-  // --- Main Orchestrator (Integrated Logic) ---
+  // --- Main Orchestrator (Supabase Integrated) ---
   async getAnswer(query: string, sources: KnowledgeSource[], systemInstruction: string): Promise<{ 
     answer: string; 
     sources: any[];
     webSources: any[];
     debugSnippets: DebugSnippet[]; 
   }> {
-    // 1. Retrieval (Vector Search)
+    // 1. Retrieval (Vector Search via Supabase)
     let queryEmbedding: number[] = [];
     try {
         queryEmbedding = await this.generateEmbedding(query);
@@ -81,43 +81,43 @@ export class GeminiService {
         return { answer: "질문 분석 중 오류가 발생했습니다.", sources: [], webSources: [], debugSnippets: [] };
     }
 
-    const allChunks: { chunk: ContentChunk; source: KnowledgeSource; score: number }[] = [];
-
-    sources.forEach(source => {
-      source.chunks.forEach(chunk => {
-        if (chunk.embedding && chunk.embedding.length > 0) {
-          const score = cosineSimilarity(queryEmbedding, chunk.embedding);
-          allChunks.push({ chunk, source, score });
-        }
-      });
+    // Call Supabase RPC function 'match_documents'
+    const { data: documents, error } = await supabase.rpc('match_documents', {
+      query_embedding: queryEmbedding,
+      match_threshold: 0.5, // 50% 이상 유사도만
+      match_count: 10       // 상위 10개
     });
 
-    allChunks.sort((a, b) => b.score - a.score);
-    const topChunks = allChunks.slice(10); // 상위 10개 문맥
+    if (error) {
+      console.error("Supabase Search Error:", error);
+      return { answer: "데이터베이스 검색 중 오류가 발생했습니다.", sources: [], webSources: [], debugSnippets: [] };
+    }
+
+    const matchedDocs = documents || [];
     
     // Debug Data Preparation
-    const debugSnippets: DebugSnippet[] = topChunks.map(item => ({
-      score: item.score,
-      text: item.chunk.text,
-      sourceTitle: item.source.title
+    const debugSnippets: DebugSnippet[] = matchedDocs.map((doc: any) => ({
+      score: doc.similarity,
+      text: doc.content,
+      sourceTitle: doc.metadata.title
     }));
 
     // Format Internal Context with URLs for inline citation
-    const internalContext = topChunks.map(item => `
-[SourceID: ${item.source.id}]
-Title: ${item.source.title}
-Date: ${item.source.date}
-URL: ${item.source.url}
-Type: ${item.source.type}
-Content: ${item.chunk.text}
+    const internalContext = matchedDocs.map((doc: any) => `
+[SourceID: ${doc.metadata.sourceId}]
+Title: ${doc.metadata.title}
+Date: ${doc.metadata.date}
+URL: ${doc.metadata.url}
+Type: ${doc.metadata.type}
+Content: ${doc.content}
     `).join('\n\n');
 
-    const uniqueSources = Array.from(new Set(topChunks.map(tc => JSON.stringify({
-      title: tc.source.title,
-      url: tc.source.url,
-      date: tc.source.date,
-      type: tc.source.type
-    })))).map(s => JSON.parse(s));
+    const uniqueSources = Array.from(new Set(matchedDocs.map((doc: any) => JSON.stringify({
+      title: doc.metadata.title,
+      url: doc.metadata.url,
+      date: doc.metadata.date,
+      type: doc.metadata.type
+    })))).map((s: any) => JSON.parse(s));
 
     // 2. Fetch Web Info
     const webResult = await this.fetchWebInfo(query);
