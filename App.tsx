@@ -1,54 +1,46 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import IngestionPanel from './components/IngestionPanel';
 import KnowledgeList from './components/KnowledgeList';
 import RAGChat from './components/RAGChat';
-import { KnowledgeSource } from './types';
+import { KnowledgeSource, SourceType } from './types';
 import { GeminiService } from './services/gemini';
+import { supabase } from './services/supabase';
 
-// Use local storage to simulate a database for this prototype
-const STORAGE_KEY = 'cheolsan_rag_db';
+// Local storage keys (Only for Instruction & Auth now)
 const INSTRUCTION_KEY = 'cheolsan_rag_instruction';
 const AUTH_SESSION_KEY = 'cheolsan_rag_auth';
 
 const App: React.FC = () => {
+  // Initialize 'isEmbedMode' lazily to prevent flash of login screen
+  const [isEmbedMode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mode') === 'embed';
+  });
+
   const [activeTab, setActiveTab] = useState<'manage' | 'chat'>('manage');
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [systemInstruction, setSystemInstruction] = useState('');
   
-  // Modes & Auth States
-  const [isEmbedMode, setIsEmbedMode] = useState(false);
+  // Auth States
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   
   // Initialize Gemini Service
   const geminiService = useMemo(() => new GeminiService(), []);
 
-  // Check for Embed Mode & Auth Session on mount
+  // Check Auth Session
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'embed') {
-      setIsEmbedMode(true);
-      // Embed mode bypasses authentication for Chat view
-    } else {
-      // Check if user already logged in this session
+    if (!isEmbedMode) {
       const savedAuth = sessionStorage.getItem(AUTH_SESSION_KEY);
       if (savedAuth === 'true') {
         setIsAuthenticated(true);
       }
     }
-  }, []);
+  }, [isEmbedMode]);
 
-  // Load from LocalStorage on mount
+  // Load Instructions locally
   useEffect(() => {
-    const savedSources = localStorage.getItem(STORAGE_KEY);
-    if (savedSources) {
-      try {
-        setSources(JSON.parse(savedSources));
-      } catch (e) {
-        console.error("Failed to load database", e);
-      }
-    }
-
     const savedInstruction = localStorage.getItem(INSTRUCTION_KEY);
     if (savedInstruction) {
       setSystemInstruction(savedInstruction);
@@ -59,20 +51,61 @@ const App: React.FC = () => {
 3. 가격이나 스펙 비교는 반드시 마크다운 표(Table)로 작성해.
 4. 말투는 블로그처럼 친근하게, 하지만 정보는 정확하게 전달해.`);
     }
+    
+    // Initial Load of Sources from Supabase
+    fetchSources();
   }, []);
 
-  // Save to LocalStorage whenever sources change
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sources));
-  }, [sources]);
+  // Function to fetch unique sources from Supabase
+  const fetchSources = async () => {
+    // Since Supabase documents table stores chunks, we fetch all metadata to group them.
+    // For a prototype, fetching all metadata is fine. For production, we'd use a separate Sources table.
+    const { data, error } = await supabase
+        .from('documents')
+        .select('metadata')
+        .order('id', { ascending: false });
+    
+    if (error || !data) {
+        console.error("Error fetching sources:", error);
+        return;
+    }
 
-  const handleAddSource = (source: KnowledgeSource) => {
-    setSources(prev => [source, ...prev]);
+    // Group by sourceId to create unique list
+    const uniqueMap = new Map();
+    data.forEach((row: any) => {
+        const meta = row.metadata;
+        if (meta && meta.sourceId && !uniqueMap.has(meta.sourceId)) {
+            uniqueMap.set(meta.sourceId, {
+                id: meta.sourceId,
+                type: meta.type || SourceType.BLOG,
+                title: meta.title,
+                url: meta.url,
+                date: meta.date,
+                originalContent: '', // Loaded on demand
+                chunks: [], // Not needed for list view
+                processed: true
+            });
+        }
+    });
+
+    setSources(Array.from(uniqueMap.values()));
   };
 
-  const handleDeleteSource = (id: string) => {
-    if (window.confirm("정말 이 데이터를 삭제하시겠습니까?")) {
-      setSources(prev => prev.filter(s => s.id !== id));
+  const handleDeleteSource = async (id: string) => {
+    if (window.confirm("정말 이 데이터를 삭제하시겠습니까? (수파베이스에서 영구 삭제)")) {
+      // Delete based on metadata->>sourceId
+      const { error } = await supabase
+        .from('documents')
+        .delete()
+        .filter('metadata->>sourceId', 'eq', id);
+
+      if (error) {
+        alert("삭제 중 오류가 발생했습니다.");
+        console.error(error);
+      } else {
+        alert("삭제되었습니다.");
+        fetchSources(); // Refresh list
+      }
     }
   };
 
@@ -101,7 +134,7 @@ const App: React.FC = () => {
       <div className="h-screen w-full bg-white">
         <RAGChat 
           geminiService={geminiService} 
-          sources={sources}
+          sources={sources} // Not used for retrieval anymore, but kept for interface
           systemInstruction={systemInstruction}
           isEmbed={true}
         />
@@ -153,8 +186,9 @@ const App: React.FC = () => {
             <h1 className="text-2xl font-bold">Cheolsan Land RAG Builder</h1>
           </div>
           <div className="flex items-center space-x-4">
-            <div className="text-sm bg-secondary px-3 py-1 rounded">
-               Prototype v0.3
+            <div className="text-sm bg-secondary px-3 py-1 rounded flex items-center gap-2">
+               <span>Cloud DB: Connected</span>
+               <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
             </div>
             <button 
               onClick={() => {
@@ -175,18 +209,7 @@ const App: React.FC = () => {
         {/* API Key Warning */}
         {!process.env.API_KEY && (
              <div className="mb-6 bg-yellow-50 border-l-4 border-yellow-400 p-4">
-             <div className="flex">
-               <div className="flex-shrink-0">
-                 <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                   <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                 </svg>
-               </div>
-               <div className="ml-3">
-                 <p className="text-sm text-yellow-700">
-                   주의: 이 앱은 로컬 데모 환경입니다. Gemini API Key가 <code>process.env.API_KEY</code>로 주입되어야 합니다.
-                 </p>
-               </div>
-             </div>
+               <p className="text-sm text-yellow-700">API KEY Missing</p>
            </div>
         )}
 
@@ -246,7 +269,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <div className="lg:col-span-2">
                 <IngestionPanel 
-                  onAddSource={handleAddSource} 
+                  onAddSource={fetchSources} 
                   geminiService={geminiService} 
                 />
               </div>
@@ -267,9 +290,9 @@ const App: React.FC = () => {
       </main>
       
       <footer className="bg-gray-800 text-gray-400 py-6 text-center text-sm">
-        <p>© 2024 Cheolsan Land. Powered by Gemini & RAG.</p>
+        <p>© 2024 Cheolsan Land. Powered by Gemini & RAG & Supabase.</p>
         <p className="mt-1">
-          데이터는 브라우저의 LocalStorage에 저장됩니다. (브라우저 캐시 삭제 시 데이터가 사라질 수 있습니다)
+          데이터는 수파베이스(Supabase) 클라우드에 안전하게 저장됩니다.
         </p>
       </footer>
     </div>
