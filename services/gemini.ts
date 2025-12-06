@@ -45,7 +45,7 @@ export class GeminiService {
     try {
       const response = await this.ai.models.generateContent({
         model: CHAT_MODEL,
-        contents: `Search the web for the latest information regarding: "${query}". Provide a detailed summary of facts, prices, and dates.`,
+        contents: `Search the web for the latest information regarding: "${query}". Focus on prices, operating hours, and recent reviews.`,
         config: {
           tools: [{ googleSearch: {} }],
         },
@@ -62,12 +62,13 @@ export class GeminiService {
       };
     } catch (e) {
       console.error("Web Search Error", e);
-      return { text: "(웹 검색 실패)", sources: [] };
+      return { text: "(웹 검색 실패 - 데이터베이스 정보로만 답변합니다)", sources: [] };
     }
   }
 
   // --- Main Orchestrator (Supabase Integrated) ---
-  async getAnswer(query: string, systemInstruction: string): Promise<{ 
+  // Added useWebSearch parameter for optional cross-check
+  async getAnswer(query: string, systemInstruction: string, useWebSearch: boolean): Promise<{ 
     answer: string; 
     sources: any[];
     webSources: any[];
@@ -83,8 +84,7 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // CRITICAL UPDATE: match_threshold = 0.0 (No filter), match_count = 50 (Max Context)
-    // This restores the "Browser Storage" feel where the AI had access to almost everything.
+    // UNLEASHED MODE: match_threshold = 0.0, match_count = 50
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
       match_threshold: 0.0, 
@@ -98,20 +98,19 @@ export class GeminiService {
 
     const matchedDocs = documents || [];
     
-    // Debug Data Preparation
+    // Debug Data
     const debugSnippets: DebugSnippet[] = matchedDocs.map((doc: any) => ({
       score: doc.similarity,
       text: doc.content,
       sourceTitle: doc.metadata.title
     }));
 
-    // Format Internal Context with URLs for inline citation
+    // Format Internal Context
     const internalContext = matchedDocs.map((doc: any) => `
-[SourceID: ${doc.metadata.sourceId}]
+[ID: ${doc.metadata.sourceId}]
 Title: ${doc.metadata.title}
 Date: ${doc.metadata.date}
 URL: ${doc.metadata.url}
-Type: ${doc.metadata.type}
 Content: ${doc.content}
     `).join('\n\n');
 
@@ -122,51 +121,38 @@ Content: ${doc.content}
       type: doc.metadata.type
     })))).map((s: any) => JSON.parse(s));
 
-    // 2. Fetch Web Info
-    const webResult = await this.fetchWebInfo(query);
+    // 2. Fetch Web Info (Conditional)
+    let webResult = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
+    if (useWebSearch) {
+        webResult = await this.fetchWebInfo(query);
+    }
 
     // 3. Final Synthesis
-    // UNLEASHED PROMPT: Removed negative constraints (e.g., "no chit-chat").
-    // Enforced Template for Chapter 1 & 2 separation.
     const finalPrompt = `
-[Role & Persona]
-You are a 'RAG' agent. Your ABSOLUTE TOP PRIORITY is to follow the [System Instruction / Persona] below.
-Act exactly as described there (tone, style, formatting). Do not hold back your personality.
-
-[System Instruction / Persona]
 ${systemInstruction}
 
-[CONTEXT 1: Internal Database Content (My Memory)]
-* This data comes from the user's database. Use this for "Chapter 1".
-* Pay close attention to numerical values, prices (e.g., 9999 won), and discounts.
-* If this section is empty or irrelevant, you MUST admit it in Chapter 1.
+[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
+1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. 
+2. Use ONLY standard Markdown syntax for tables and formatting.
+3. If you use HTML, the system will break.
+
+[CONTEXT 1: My Database (The Truth)]
+* Use this for "## 🏰 철산랜드 데이터베이스".
+* Provide EXTREME detail.
 ${internalContext}
 
-[CONTEXT 2: Latest Web Search Info (Cross-Check)]
-* This data comes from Google Search. Use this for "Chapter 2".
+[CONTEXT 2: Web Search (For Cross-Check)]
+* Use this for "## 🌐 최신 AI 검색 크로스체크".
+* Status: ${useWebSearch ? "Active" : "Disabled"}
 ${webResult.text}
 
 [User Question]
 ${query}
 
-[Mandatory Output Template]
-Please structure your answer EXACTLY as follows (unless the System Instruction says otherwise, but keep the chapter logic):
-
-## 챕터 1: 철산랜드 데이터베이스
-(Your answer based *only* on Context 1, using the requested persona)
-
-## 챕터 2: 최신 AI 검색 크로스체크
-(Your cross-check based on Context 2, using the requested persona or objective tone)
-
-[Formatting Guidelines]
-1. **Markdown Only**: Use standard Markdown syntax.
-2. **Clickable Links (MANDATORY)**:
-   - Always format links as: \`[Link Title](URL)\`.
-3. **YouTube Timestamp Logic**:
-   - IF you find time patterns like "(12:30)" or "12분 30초" in the [Internal Database Content] text:
-     - CALCULATE the seconds (e.g., 12:30 -> 12*60 + 30 = 750).
-     - APPEND \`&t=750\` to the YouTube URL.
-     - Example Output: "[Video Title @ 12:30](https://youtu.be/xyz?t=750)"
+[Format Guide]
+1. Start with "## 🏰 철산랜드 데이터베이스".
+2. If Context 2 is Active, add "## 🌐 최신 AI 검색 크로스체크" at the end. If Disabled, SKIP it.
+3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
 `;
 
     const response = await this.ai.models.generateContent({
