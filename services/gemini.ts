@@ -84,7 +84,7 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // UNLEASHED MODE: match_threshold = 0.0, match_count = 50
+    // UNLEASHED MODE: match_threshold = 0.0 (No filtering), match_count = 50 (Max context)
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
       match_threshold: 0.0, 
@@ -135,12 +135,14 @@ ${systemInstruction}
 
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
 1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. 
-2. Use ONLY standard Markdown syntax for tables and formatting.
-3. If you use HTML, the system will break.
+2. Use ONLY standard Markdown syntax.
+3. **DO NOT generate a 'Reference List' or 'Sources' section at the end of your response.** The system UI already displays the source buttons.
+4. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
 
 [CONTEXT 1: My Database (The Truth)]
 * Use this for "## 🏰 철산랜드 데이터베이스".
 * Provide EXTREME detail.
+* IMPORTANT: If the user asks for specific values (prices, time) found here, prioritize this data.
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
