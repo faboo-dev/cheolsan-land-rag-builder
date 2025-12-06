@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { DebugSnippet } from "../types";
 import { supabase } from "./supabase";
@@ -66,7 +65,6 @@ export class GeminiService {
   }
 
   // --- Main Orchestrator (Supabase Integrated) ---
-  // sources 파라미터 제거됨 (Supabase RPC 사용하므로 클라이언트에서 목록 전달 불필요)
   async getAnswer(query: string, systemInstruction: string): Promise<{ 
     answer: string; 
     sources: any[];
@@ -83,10 +81,11 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
+    // Updated: Increased match_count to 30 to provide rich context
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.5, // 50% 이상 유사도만
-      match_count: 10       // 상위 10개
+      match_threshold: 0.3, // Lower threshold to capture more potential matches
+      match_count: 30       // Increased from 10 to 30
     });
 
     if (error) {
@@ -127,27 +126,29 @@ Content: ${doc.content}
     const finalPrompt = `
 [Task]
 Answer the user's question by synthesizing the "Internal Database" and "Latest Web Search Info".
-Follow the [System Instruction] strictly.
+The user wants a DETAILED, RICH answer, not a summary.
 
 [System Instruction / Persona]
 ${systemInstruction}
 
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
-1. NO FILLER TEXT: Do NOT start with "Okay", "Here is", "Based on", "Sure", or "I found". Start DIRECTLY with the content (e.g., Header, Table, or Answer Text).
-2. NO SEPARATORS: Do NOT use horizontal rules like "---" or "***" at the beginning or end.
-3. NO HTML: Do NOT use <div>, <span>, <br>, or <table> tags.
-4. NO JSON DUMPS: Do not output raw JSON data.
+1. NO FILLER TEXT: Do NOT start with "Okay", "Here is", "Based on". Start DIRECTLY with the content.
+2. NO HTML TAGS: Use Markdown only.
+3. NO JSON DUMPS.
 
 [CRITICAL FORMATTING RULES]
 1. **Markdown Only**: Use standard Markdown syntax.
 2. **Clickable Links (MANDATORY)**:
-   - When you mention a source, you MUST create a standard Markdown link: \`[Link Title](URL)\`.
-   - NEVER provide a title without the URL.
-   - Example: "Check this post: [My Blog Post](https://blog.naver.com/...)"
-3. **YouTube Timestamp Logic**:
-   - If the context mentions a specific time (e.g., "at 02:30"), you MUST calculate the seconds (2*60+30 = 150) and append \`&t=150\` to the YouTube URL.
-   - Example: "In the video [Review @ 02:30](https://youtu.be/xyz?t=150)..."
-4. **Tables**: Use Markdown tables for comparisons. (e.g. \`| Col1 | Col2 |\`)
+   - When citing a source, use: \`[Link Title](URL)\`.
+3. **YouTube Timestamp Logic (CRITICAL)**:
+   - YOU MUST scan the "Internal Database" text for time patterns like "(12:30)" or "12분 30초".
+   - If found, CALCULATE the seconds (12*60 + 30 = 750).
+   - Append \`&t=750\` to the YouTube URL.
+   - Example: "As seen here: [Video Title @ 12:30](https://youtu.be/xyz?t=750)"
+   - IF NO TIMESTAMP IS FOUND in the text, just link the video without timestamp.
+4. **Date Priority**:
+   - If "Internal Database" and "Web Search" conflict, trust the ONE WITH THE MORE RECENT DATE.
+   - Explicitly mention the date of the information.
 
 [Internal Database Content]
 ${internalContext}

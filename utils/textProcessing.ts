@@ -2,13 +2,13 @@ import { ContentChunk } from '../types';
 
 /**
  * Splits text into chunks with overlap to maintain context.
- * This addresses the user's concern about "cutting too finely and losing context".
+ * Updated: Increased default chunkSize to 2000 to capture full context and timestamps.
  */
 export const smartChunking = (
   text: string, 
   parentId: string, 
-  chunkSize: number = 500, 
-  overlap: number = 100
+  chunkSize: number = 2000, // 500 -> 2000 (4x larger context)
+  overlap: number = 200     // 100 -> 200 (More overlap for safety)
 ): ContentChunk[] => {
   const chunks: ContentChunk[] = [];
   
@@ -23,7 +23,7 @@ export const smartChunking = (
     // If we are not at the end of the text, try to find a natural break (period, newline)
     // instead of cutting a word in half.
     if (endIndex < cleanText.length) {
-      const lookAhead = cleanText.substring(startIndex, endIndex + 50); // Look a bit further for a sentence end
+      const lookAhead = cleanText.substring(startIndex, endIndex + 100); // Look further
       const lastPeriod = lookAhead.lastIndexOf('.');
       const lastNewLine = lookAhead.lastIndexOf('\n');
       
@@ -47,9 +47,8 @@ export const smartChunking = (
     // Move the start index forward, subtracting the overlap
     startIndex = endIndex - overlap;
     
-    // Safety break to prevent infinite loops if something goes wrong
+    // Safety break
     if (startIndex >= cleanText.length || (endIndex - overlap) <= startIndex) {
-       // If progress isn't made, force move
        if(endIndex === cleanText.length) break;
        startIndex = endIndex; 
     }
