@@ -1,10 +1,12 @@
+
 import React, { useState } from 'react';
 import { SourceType, KnowledgeSource } from '../types';
 import { smartChunking } from '../utils/textProcessing';
 import { GeminiService } from '../services/gemini';
+import { supabase } from '../services/supabase';
 
 interface Props {
-  onAddSource: (source: KnowledgeSource) => void;
+  onAddSource: () => void; // Callback to refresh list
   geminiService: GeminiService;
 }
 
@@ -33,31 +35,42 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
       // 1. Chunking
       const chunks = smartChunking(content, sourceId);
       
-      // 2. Embedding (Simulating batch processing)
-      const chunksWithEmbeddings = [];
+      // 2. Embedding & Insert to Supabase
+      const rowsToInsert = [];
       
       for (let i = 0; i < chunks.length; i++) {
         try {
             const vector = await geminiService.generateEmbedding(chunks[i].text);
-            chunksWithEmbeddings.push({ ...chunks[i], embedding: vector });
+            
+            // Prepare row for Supabase
+            rowsToInsert.push({
+              content: chunks[i].text,
+              embedding: vector,
+              metadata: {
+                sourceId,
+                title,
+                url,
+                date,
+                type,
+                chunkIndex: i
+              }
+            });
+
         } catch (err) {
             console.error(`Failed to embed chunk ${i}`, err);
         }
-        setProgress(Math.round(((i + 1) / chunks.length) * 100));
+        setProgress(Math.round(((i + 1) / chunks.length) * 90));
       }
 
-      const newSource: KnowledgeSource = {
-        id: sourceId,
-        type,
-        title,
-        url,
-        date,
-        originalContent: content,
-        chunks: chunksWithEmbeddings,
-        processed: true
-      };
+      // Batch insert to Supabase
+      const { error } = await supabase.from('documents').insert(rowsToInsert);
 
-      onAddSource(newSource);
+      if (error) {
+        throw error;
+      }
+
+      setProgress(100);
+      onAddSource(); // Refresh list
       
       // Reset form
       setTitle('');
@@ -65,11 +78,11 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
       setDate('');
       setContent('');
       setProgress(0);
-      alert("데이터베이스에 성공적으로 추가되었습니다!");
+      alert("수파베이스(클라우드)에 성공적으로 저장되었습니다!");
 
     } catch (error) {
       console.error(error);
-      alert("처리 중 오류가 발생했습니다. 네트워크 상태를 확인해주세요.");
+      alert("처리 중 오류가 발생했습니다. Supabase 설정을 확인해주세요.");
     } finally {
       setIsProcessing(false);
     }
@@ -79,12 +92,12 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
     <div className="bg-white p-6 rounded-lg shadow-md border border-gray-200">
       <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
         <svg className="w-6 h-6 mr-2 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        새로운 지식 추가 (데이터베이스 구축)
+        새로운 지식 추가 (수파베이스 DB)
       </h2>
       
       <div className="mb-4 bg-blue-50 p-4 rounded text-sm text-blue-800">
         <p className="font-semibold">💡 크롤링 가이드 (수동 입력)</p>
-        <p>현재 보안상의 이유로 직접 복사/붙여넣기를 해야 합니다.</p>
+        <p>저장된 데이터는 수파베이스 클라우드에 영구 보관됩니다.</p>
         <ul className="list-disc ml-5 mt-1 text-blue-700">
           <li><strong>블로그:</strong> 본문 전체를 복사해서 붙여넣으세요.</li>
           <li><strong>유튜브(중요):</strong> 자막 스크립트를 복사할 때 <strong>시간 정보(예: 01:30)가 포함된 텍스트</strong>를 붙여넣으면, AI가 답변할 때 몇 분 몇 초인지 알려줄 수 있습니다.</li>
@@ -150,9 +163,6 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
             onChange={(e) => setContent(e.target.value)}
             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring p-2 border"
           ></textarea>
-          <p className="text-xs text-gray-500 mt-1">
-            Tip: 텍스트가 길어도 AI가 자동으로 잘라서 저장합니다.
-          </p>
         </div>
 
         <button 
@@ -162,7 +172,7 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
             isProcessing ? 'bg-gray-400 cursor-not-allowed' : 'bg-primary hover:bg-secondary'
           }`}
         >
-          {isProcessing ? `처리 및 저장 중... (${progress}%)` : '이 지식 저장하기'}
+          {isProcessing ? `처리 및 저장 중... (${progress}%)` : '이 지식 수파베이스에 저장하기'}
         </button>
       </form>
     </div>
