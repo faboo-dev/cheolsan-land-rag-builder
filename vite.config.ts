@@ -12,7 +12,10 @@ export default defineConfig(({ mode }) => {
       // This ensures process.env.API_KEY is available in the browser code
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
       // Admin Password Configuration
-      'process.env.ADMIN_PASSWORD': JSON.stringify(env.ADMIN_PASSWORD || '2126asqw!@')
+      'process.env.ADMIN_PASSWORD': JSON.stringify(env.ADMIN_PASSWORD || '2126asqw!@'),
+      // Supabase Configuration
+      'process.env.SUPABASE_URL': JSON.stringify(env.SUPABASE_URL),
+      'process.env.SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY)
     }
   };
 });
