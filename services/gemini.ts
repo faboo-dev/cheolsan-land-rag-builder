@@ -84,11 +84,11 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // [Hybrid Search Logic Step 1] Fetch a large pool (100) to find potential matches that vector search missed
+    // [Hybrid Search Logic Step 1] Fetch a LARGE pool (100) to ensure we catch keyword matches even if vector score is low
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
       match_threshold: 0.0, 
-      match_count: 100 // Fetch 100 candidates first
+      match_count: 100 
     });
 
     if (error) {
@@ -98,9 +98,9 @@ export class GeminiService {
 
     let matchedDocs = documents || [];
 
-    // [Hybrid Search Logic Step 2] Reranking based on Keywords
-    // Extract keywords (simple whitespace split, length > 1)
-    const keywords = query.split(/\s+/).filter(w => w.length > 1);
+    // [Hybrid Search Logic Step 2] Aggressive Keyword Boosting (Reranking)
+    // Extract keywords: Split by space, filter out short words, and special chars
+    const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
 
     matchedDocs = matchedDocs.map((doc: any) => {
         let bonusScore = 0;
@@ -109,10 +109,22 @@ export class GeminiService {
         
         keywords.forEach(keyword => {
             const k = keyword.toLowerCase();
-            // Title Match: High Bonus (+0.3)
-            if (title.includes(k)) bonusScore += 0.3;
-            // Content Match: Low Bonus (+0.05)
-            if (content.includes(k)) bonusScore += 0.05;
+            
+            // SUPER AGGRESSIVE TITLE MATCH
+            // If the keyword appears in the TITLE, this is likely the exact document the user wants.
+            // Give a massive boost to override vector similarity "vibe" checks.
+            if (title.includes(k)) {
+                bonusScore += 0.8; // Huge boost
+            } 
+            
+            // Content Match
+            // Count occurrences to give more weight to documents that mention the keyword frequently
+            const regex = new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+            const count = (content.match(regex) || []).length;
+            
+            if (count > 0) {
+                bonusScore += 0.1 + (count * 0.02); // Base boost + frequency boost
+            }
         });
 
         return {
@@ -170,6 +182,7 @@ ${systemInstruction}
 * Use this for "## 🏰 철산랜드 데이터베이스".
 * Provide EXTREME detail.
 * IMPORTANT: If the user asks for specific values (prices, time) found here, prioritize this data.
+* If specific keywords from the user question appear in these documents, focus heavily on those documents.
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
