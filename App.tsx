@@ -55,7 +55,7 @@ const App: React.FC = () => {
    - **절대 경고**: 데이터베이스에 없는 내용이나 추측은 절대하지마. 할루시네이션은 절대 금지야.
    - 답변 태도: 위에 말한 [답변 형태나 태도]를 참고해서 완전 개그감 쩔게 대답해줘.
    - 내용: 내용을 최대한 자세하고 친절하게 알려줘. 이게 거의 핵심이야. 내가 답변하는 것처럼 최대한 자세하게 답변을 해줘야하는게 목표야.
-   - **공지사항**: 만약 나의 데이터베이스에 없는 내용에 대한 질문이라면 "형님, 제 수첩(데이터베이스)에는 관련 내용이 없네요. 대신 아래 AI 검색으로 찾아봐 드릴게요!"라는 식으로 명확한 공지가 있어야해.
+   - **공지사항**: 만약 나의 데이터베이스에 없는 내용에 대한 질문이라면 나의 데이터베이스에는 관련내용이 없다. AI검색으로 답변을 해주겠다는 식으로 명확한 공지가 있어야해
 
 2. **두번째 챕터 (최신 실시간 AI 검색 크로스체크)**
    - [Latest Web Search Info]를 통해 크로스체크를 해줘.
@@ -81,7 +81,6 @@ const App: React.FC = () => {
   // Function to fetch unique sources from Supabase
   const fetchSources = async () => {
     // Since Supabase documents table stores chunks, we fetch all metadata to group them.
-    // For a prototype, fetching all metadata is fine. For production, we'd use a separate Sources table.
     const { data, error } = await supabase
         .from('documents')
         .select('metadata')
@@ -115,7 +114,6 @@ const App: React.FC = () => {
 
   const handleDeleteSource = async (id: string) => {
     if (window.confirm("정말 이 데이터를 삭제하시겠습니까? (수파베이스에서 영구 삭제)")) {
-      // Delete based on metadata->>sourceId
       const { error } = await supabase
         .from('documents')
         .delete()
@@ -156,7 +154,7 @@ const App: React.FC = () => {
       <div className="h-screen w-full bg-white">
         <RAGChat 
           geminiService={geminiService} 
-          sources={sources} // Not used for retrieval anymore, but kept for interface
+          sources={sources}
           systemInstruction={systemInstruction}
           isEmbed={true}
         />
