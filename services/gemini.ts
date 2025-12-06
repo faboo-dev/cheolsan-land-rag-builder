@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { KnowledgeSource, ContentChunk, DebugSnippet } from "../types";
+import { DebugSnippet } from "../types";
 import { supabase } from "./supabase";
 
 // Model constants
@@ -66,7 +66,8 @@ export class GeminiService {
   }
 
   // --- Main Orchestrator (Supabase Integrated) ---
-  async getAnswer(query: string, sources: KnowledgeSource[], systemInstruction: string): Promise<{ 
+  // sources 파라미터 제거됨 (Supabase RPC 사용하므로 클라이언트에서 목록 전달 불필요)
+  async getAnswer(query: string, systemInstruction: string): Promise<{ 
     answer: string; 
     sources: any[];
     webSources: any[];
