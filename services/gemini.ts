@@ -1,5 +1,7 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { DebugSnippet } from "../types";
+import "./supabase"; // Ensure relative import for module resolution
 import { supabase } from "./supabase";
 
 // Model constants
@@ -81,11 +83,10 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // Updated: Increased match_count to 30 to provide rich context
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.3, // Lower threshold to capture more potential matches
-      match_count: 30       // Increased from 10 to 30
+      match_threshold: 0.3, 
+      match_count: 30 // High count for context
     });
 
     if (error) {
@@ -125,39 +126,37 @@ Content: ${doc.content}
     // 3. Final Synthesis
     const finalPrompt = `
 [Task]
-Answer the user's question by synthesizing the "Internal Database" and "Latest Web Search Info".
-The user wants a DETAILED, RICH answer, not a summary.
+You are a 'RAG' agent. Your goal is to answer the user's question by strictly following the [System Instruction / Persona].
 
 [System Instruction / Persona]
 ${systemInstruction}
 
-[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
-1. NO FILLER TEXT: Do NOT start with "Okay", "Here is", "Based on". Start DIRECTLY with the content.
-2. NO HTML TAGS: Use Markdown only.
-3. NO JSON DUMPS.
-
-[CRITICAL FORMATTING RULES]
-1. **Markdown Only**: Use standard Markdown syntax.
-2. **Clickable Links (MANDATORY)**:
-   - When citing a source, use: \`[Link Title](URL)\`.
-3. **YouTube Timestamp Logic (CRITICAL)**:
-   - YOU MUST scan the "Internal Database" text for time patterns like "(12:30)" or "12분 30초".
-   - If found, CALCULATE the seconds (12*60 + 30 = 750).
-   - Append \`&t=750\` to the YouTube URL.
-   - Example: "As seen here: [Video Title @ 12:30](https://youtu.be/xyz?t=750)"
-   - IF NO TIMESTAMP IS FOUND in the text, just link the video without timestamp.
-4. **Date Priority**:
-   - If "Internal Database" and "Web Search" conflict, trust the ONE WITH THE MORE RECENT DATE.
-   - Explicitly mention the date of the information.
-
-[Internal Database Content]
+[CONTEXT 1: Internal Database Content (Primary Source)]
 ${internalContext}
 
-[Latest Web Search Info]
+[CONTEXT 2: Latest Web Search Info (Secondary Source)]
 ${webResult.text}
 
 [User Question]
 ${query}
+
+[Formatting Guidelines]
+1. **Markdown Only**: Use standard Markdown syntax (bold, list, tables).
+2. **Clickable Links (MANDATORY)**:
+   - Always format links as: \`[Link Title](URL)\`.
+   - Do NOT just write "URL" or "[Link]".
+3. **YouTube Timestamp Logic**:
+   - IF you find time patterns like "(12:30)" or "12분 30초" in the [Internal Database Content] text:
+     - CALCULATE the seconds (e.g., 12:30 -> 12*60 + 30 = 750).
+     - APPEND \`&t=750\` to the YouTube URL.
+     - Example Output: "[Video Title @ 12:30](https://youtu.be/xyz?t=750)"
+   - IF NO TIMESTAMP found, just link the video normally.
+
+[Constraints]
+- Respect the persona (e.g., "Hyungnim", funny tone) defined in the System Instruction.
+- Do NOT use filler phrases like "Okay, here is the answer" unless it fits the persona.
+- NO HTML tags.
+- NO Hallucinations: If [Internal Database Content] is empty or irrelevant for Chapter 1, explicitly state it as per instructions.
     `;
 
     const response = await this.ai.models.generateContent({
