@@ -83,12 +83,12 @@ export class GeminiService {
     }
 
     // Call Supabase RPC function 'match_documents'
-    // CRITICAL UPDATE: Set match_threshold to 0.0 to retrieve ALL potentially relevant chunks.
-    // Let the LLM filter out irrelevant info. This fixes the issue of missing specific price/discount info.
+    // CRITICAL UPDATE: match_threshold = 0.0 (No filter), match_count = 50 (Max Context)
+    // This restores the "Browser Storage" feel where the AI had access to almost everything.
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: queryEmbedding,
       match_threshold: 0.0, 
-      match_count: 30 // High count for context
+      match_count: 50 
     });
 
     if (error) {
@@ -126,43 +126,48 @@ Content: ${doc.content}
     const webResult = await this.fetchWebInfo(query);
 
     // 3. Final Synthesis
+    // UNLEASHED PROMPT: Removed negative constraints (e.g., "no chit-chat").
+    // Enforced Template for Chapter 1 & 2 separation.
     const finalPrompt = `
-[Task]
-You are a 'RAG' agent. Your goal is to answer the user's question by strictly following the [System Instruction / Persona].
+[Role & Persona]
+You are a 'RAG' agent. Your ABSOLUTE TOP PRIORITY is to follow the [System Instruction / Persona] below.
+Act exactly as described there (tone, style, formatting). Do not hold back your personality.
 
 [System Instruction / Persona]
 ${systemInstruction}
 
-[CONTEXT 1: Internal Database Content (Primary Source)]
+[CONTEXT 1: Internal Database Content (My Memory)]
 * This data comes from the user's database. Use this for "Chapter 1".
 * Pay close attention to numerical values, prices (e.g., 9999 won), and discounts.
-* If this section is empty or irrelevant, you MUST admit it in Chapter 1 as per instructions.
+* If this section is empty or irrelevant, you MUST admit it in Chapter 1.
 ${internalContext}
 
-[CONTEXT 2: Latest Web Search Info (Secondary Source)]
+[CONTEXT 2: Latest Web Search Info (Cross-Check)]
 * This data comes from Google Search. Use this for "Chapter 2".
 ${webResult.text}
 
 [User Question]
 ${query}
 
+[Mandatory Output Template]
+Please structure your answer EXACTLY as follows (unless the System Instruction says otherwise, but keep the chapter logic):
+
+## 챕터 1: 철산랜드 데이터베이스
+(Your answer based *only* on Context 1, using the requested persona)
+
+## 챕터 2: 최신 AI 검색 크로스체크
+(Your cross-check based on Context 2, using the requested persona or objective tone)
+
 [Formatting Guidelines]
 1. **Markdown Only**: Use standard Markdown syntax.
 2. **Clickable Links (MANDATORY)**:
    - Always format links as: \`[Link Title](URL)\`.
-   - Do NOT just write "URL" or "[Link]".
 3. **YouTube Timestamp Logic**:
    - IF you find time patterns like "(12:30)" or "12분 30초" in the [Internal Database Content] text:
      - CALCULATE the seconds (e.g., 12:30 -> 12*60 + 30 = 750).
      - APPEND \`&t=750\` to the YouTube URL.
      - Example Output: "[Video Title @ 12:30](https://youtu.be/xyz?t=750)"
-   - IF NO TIMESTAMP found, just link the video normally.
-
-[Final Constraints]
-- ABSOLUTELY NO HALLUCINATIONS. If info is not in Context 1, say so.
-- Strictly separate Chapter 1 and Chapter 2 as requested.
-- Use the requested persona (funny/Hyungnim) for Chapter 1 and objective tone for Chapter 2.
-    `;
+`;
 
     const response = await this.ai.models.generateContent({
       model: CHAT_MODEL,
