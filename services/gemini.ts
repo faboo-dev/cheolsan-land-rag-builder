@@ -122,7 +122,9 @@ Content: ${doc.content}
     })))).map((s: any) => JSON.parse(s));
 
     // 2. Fetch Web Info (Conditional)
-    let webResult = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
+    // Fix: Explicitly type the variable to avoid type inference error (never[])
+    let webResult: { text: string; sources: any[] } = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
+    
     if (useWebSearch) {
         webResult = await this.fetchWebInfo(query);
     }
