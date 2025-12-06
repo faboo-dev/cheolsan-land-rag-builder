@@ -208,15 +208,15 @@ ${msg.text?.substring(0, 100)}...
 
       <div className="bg-white border-t p-2">
         {/* Speed Option Checkbox */}
-        <div className="px-4 py-1 flex items-center">
-            <label className="flex items-center space-x-2 cursor-pointer text-sm text-gray-600 hover:text-primary">
+        <div className="px-4 py-2 flex items-center">
+            <label className="flex items-center space-x-2 cursor-pointer text-xs text-gray-600 hover:text-primary">
                 <input 
                     type="checkbox" 
                     checked={useWebSearch}
                     onChange={(e) => setUseWebSearch(e.target.checked)}
-                    className="form-checkbox h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary"
+                    className="form-checkbox h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary flex-shrink-0"
                 />
-                <span className="font-semibold">🌐 최신 실시간 정보 크로스체크 (속도 느림)</span>
+                <span className="font-medium leading-tight">최신 AI웹검색을 통해 내용이나 가격등의 크로스체크를 원하시면 체크해주세요. 대신 속도는 조금 더 걸립니다</span>
             </label>
         </div>
 
