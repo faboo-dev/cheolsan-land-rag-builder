@@ -13,32 +13,76 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Clients
-// Note: Ensure SUPABASE_URL and SUPABASE_ANON_KEY are set in Render Environment Variables
-const supabase = createClient(
-  process.env.SUPABASE_URL || '',
-  process.env.SUPABASE_ANON_KEY || ''
-);
+// --- Configuration Check & Initialization ---
+console.log("Starting Cheolsan Land Server...");
 
-// Note: Ensure API_KEY is set in Render Environment Variables
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const API_KEY = process.env.API_KEY;
 
-// Routes
+let supabase = null;
+let ai = null;
+
+// 1. Check Supabase
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error("❌ CRITICAL: Supabase URL or Key is MISSING in environment variables.");
+} else {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log("✅ Supabase Client Initialized.");
+  } catch (err) {
+    console.error("❌ Failed to initialize Supabase:", err.message);
+  }
+}
+
+// 2. Check Gemini
+if (!API_KEY) {
+  console.error("❌ CRITICAL: Google API_KEY is MISSING in environment variables.");
+} else {
+  try {
+    ai = new GoogleGenAI({ apiKey: API_KEY });
+    console.log("✅ Gemini Client Initialized.");
+  } catch (err) {
+    console.error("❌ Failed to initialize Gemini:", err.message);
+  }
+}
+
+// --- Routes ---
+
 app.get('/', (req, res) => {
-  res.send('Cheolsan Land RAG Server is Running! 🎡');
+  const status = {
+    status: 'running',
+    supabase: !!supabase ? 'connected' : 'disconnected',
+    gemini: !!ai ? 'connected' : 'disconnected'
+  };
+  res.json(status);
 });
 
 // 🔥 Full Context Chat Endpoint
 app.post('/api/chat/full-context', async (req, res) => {
   try {
+    // Safety Check
+    if (!supabase || !ai) {
+      console.error("Request failed: Server is not properly configured.");
+      return res.status(500).json({ 
+        error: 'Server configuration error. Check logs for missing API Keys.',
+        details: {
+            supabase: !!supabase,
+            gemini: !!ai
+        }
+      });
+    }
+
     const { query, systemInstruction } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: 'Query is required' });
     }
 
-    // 1. Fetch ALL documents from Supabase (Backend is much faster)
-    // Supabase JS limit is 1000 by default, we bump it to 10000 to catch everything
+    console.log(`[Full Context] Processing query: ${query.substring(0, 50)}...`);
+
+    // 1. Fetch ALL documents from Supabase
+    // Supabase JS limit bumped to 10000 to catch everything
     const { data: documents, error } = await supabase
       .from('documents')
       .select('content, metadata')
@@ -46,9 +90,10 @@ app.post('/api/chat/full-context', async (req, res) => {
 
     if (error) throw error;
 
-    console.log(`[Server] Fetched ${documents ? documents.length : 0} documents for full context.`);
+    const docCount = documents ? documents.length : 0;
+    console.log(`[Full Context] Fetched ${docCount} documents.`);
 
-    if (!documents || documents.length === 0) {
+    if (docCount === 0) {
         return res.json({ answer: "데이터베이스에 저장된 내용이 없습니다.", docCount: 0 });
     }
 
@@ -85,15 +130,15 @@ ${query}
     // 5. Send back response
     res.json({ 
       answer: response.text, 
-      docCount: documents.length 
+      docCount: docCount
     });
 
   } catch (error) {
-    console.error('[Server Error]', error);
+    console.error('[Server Request Error]', error);
     res.status(500).json({ error: error.message || 'Internal Server Error' });
   }
 });
 
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`🚀 Server running on port ${port}`);
 });
