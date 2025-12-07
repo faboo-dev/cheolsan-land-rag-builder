@@ -82,12 +82,12 @@ export class GeminiService {
     
     if (useFullContext) {
         // [🔥 Full Context Mode] Fetch ALL documents without filtering
+        // CRITICAL FIX: Supabase defaults to 1000 rows. We MUST increase the limit.
         try {
-            // Fetch all documents (id, content, metadata)
-            // Note: If DB is huge, this might need pagination, but for personal DB it's fine.
             const { data, error } = await supabase
                 .from('documents')
-                .select('id, content, metadata');
+                .select('id, content, metadata')
+                .limit(10000); // Increase limit to 10,000 chunks to ensure full coverage
             
             if (!error && data) {
                 // We treat all docs as "relevant" in this mode
@@ -95,6 +95,7 @@ export class GeminiService {
                     ...doc,
                     finalScore: 100 // Arbitrary high score since we force inclusion
                 }));
+                console.log(`[Full Context] Loaded ${finalDocs.length} chunks.`);
             }
         } catch (e) {
             console.error("Full Context Fetch Error", e);
@@ -107,28 +108,33 @@ export class GeminiService {
         // 1. Vector Search
         try {
             const queryEmbedding = await this.generateEmbedding(query);
+            // RPC might still have internal limits, but match_count controls return size
             const { data: documents, error } = await supabase.rpc('match_documents', {
                 query_embedding: queryEmbedding,
                 match_threshold: 0.0, 
-                match_count: 100 
+                match_count: 100 // Fetch widely first
             });
             if (!error && documents) vectorDocs = documents;
         } catch (e) {
             console.error("Vector search failed", e);
         }
 
-        // 2. Keyword Search
+        // 2. Keyword Search (Hybrid)
         try {
+            // Extract keywords (length > 1)
             const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+            // Use top 5 keywords
             const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
 
             if (targetKeywords.length > 0) {
+                // Construct a query that searches for ANY of the keywords in title OR content
+                // Note: We also need to increase limit here just in case
                 const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
                 const { data: kDocs, error: kError } = await supabase
                     .from('documents')
                     .select('id, content, metadata') 
                     .or(conditions)
-                    .limit(50); 
+                    .limit(100); // Increase specific keyword fetch limit
                 if (!kError && kDocs) keywordDocs = kDocs;
             }
         } catch (e) {
@@ -142,13 +148,19 @@ export class GeminiService {
         });
         keywordDocs.forEach(doc => {
             if (!combinedDocsMap.has(doc.id)) {
-                combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
+                // If existing, boost score. If new, add with base score.
+                const existing = combinedDocsMap.get(doc.id);
+                if (existing) {
+                    existing.baseScore += 0.2; // Keyword match bonus on top of vector
+                } else {
+                    combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
+                }
             }
         });
 
         let allDocs = Array.from(combinedDocsMap.values());
 
-        // 4. Reranking
+        // 4. Reranking (The most important step)
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
         const now = new Date();
 
@@ -159,23 +171,30 @@ export class GeminiService {
             
             keywords.forEach(keyword => {
                 const k = keyword.toLowerCase();
+                // [Title Match] Massive Boost -> Force to top
                 if (title.includes(k)) bonusScore += 10.0; 
+                
+                // [Content Frequency] +0.5 per occurrence
                 const count = content.split(k).length - 1;
                 if (count > 0) bonusScore += (count * 0.5); 
             });
 
+            // [Recency Boost]
             if (doc.metadata.date) {
                 const docDate = new Date(doc.metadata.date);
                 const diffTime = Math.abs(now.getTime() - docDate.getTime());
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                if (diffDays <= 180) bonusScore += 3.0;
-                else if (diffDays <= 365) bonusScore += 1.0;
+                if (diffDays <= 180) bonusScore += 3.0; // Within 6 months
+                else if (diffDays <= 365) bonusScore += 1.0; // Within 1 year
             }
 
             return { ...doc, finalScore: (doc.baseScore || 0) + bonusScore };
         });
 
+        // Sort descending
         allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
+        
+        // Smart Cutoff: Top 25
         finalDocs = allDocs.slice(0, 25);
     }
     
@@ -223,6 +242,7 @@ ${systemInstruction}
 * Use this for "## 🏰 철산랜드 데이터베이스".
 * **This is the Primary Source.**
 * **If the answer is found here, provide EXTREME DETAIL.**
+* Mode: ${useFullContext ? "FULL CONTEXT (Reading ALL Data)" : "RAG (Retrieved Data)"}
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
