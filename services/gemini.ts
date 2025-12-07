@@ -65,113 +65,119 @@ export class GeminiService {
     }
   }
 
-  // --- Main Orchestrator (Supabase Integrated) ---
-  async getAnswer(query: string, systemInstruction: string, useWebSearch: boolean): Promise<{ 
+  // --- Main Orchestrator ---
+  async getAnswer(
+      query: string, 
+      systemInstruction: string, 
+      useWebSearch: boolean, 
+      useFullContext: boolean = false
+    ): Promise<{ 
     answer: string; 
     sources: any[];
     webSources: any[];
     debugSnippets: DebugSnippet[]; 
   }> {
     
-    let vectorDocs: any[] = [];
-    let keywordDocs: any[] = [];
+    let finalDocs: any[] = [];
     
-    // 1. [Wide Net Strategy] Vector Search
-    // Fetch 100 docs to capture even loosely related items
-    try {
-        const queryEmbedding = await this.generateEmbedding(query);
-        const { data: documents, error } = await supabase.rpc('match_documents', {
-            query_embedding: queryEmbedding,
-            match_threshold: 0.0, 
-            match_count: 100 
-        });
-        if (!error && documents) vectorDocs = documents;
-    } catch (e) {
-        console.error("Vector search failed", e);
-    }
-
-    // 2. [Harpoon Strategy] Hybrid Keyword Search
-    try {
-        const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
-        const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
-
-        if (targetKeywords.length > 0) {
-            // Find docs containing ANY of the keywords
-            const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
-            
-            const { data: kDocs, error: kError } = await supabase
+    if (useFullContext) {
+        // [🔥 Full Context Mode] Fetch ALL documents without filtering
+        try {
+            // Fetch all documents (id, content, metadata)
+            // Note: If DB is huge, this might need pagination, but for personal DB it's fine.
+            const { data, error } = await supabase
                 .from('documents')
-                .select('id, content, metadata') 
-                .or(conditions)
-                .limit(50); 
+                .select('id, content, metadata');
             
-            if (!kError && kDocs) keywordDocs = kDocs;
-        }
-    } catch (e) {
-        console.error("Keyword search failed", e);
-    }
-
-    // 3. Merge & Deduplicate
-    const combinedDocsMap = new Map();
-
-    vectorDocs.forEach(doc => {
-        combinedDocsMap.set(doc.id, { ...doc, origin: 'vector', baseScore: doc.similarity });
-    });
-
-    keywordDocs.forEach(doc => {
-        if (!combinedDocsMap.has(doc.id)) {
-            combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
-        }
-    });
-
-    let allDocs = Array.from(combinedDocsMap.values());
-
-    // 4. [Smart Reranking] Frequency & Recency & Title Boosting
-    const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
-    const now = new Date();
-
-    allDocs = allDocs.map((doc: any) => {
-        let bonusScore = 0;
-        const title = (doc.metadata.title || '').toLowerCase();
-        const content = (doc.content || '').toLowerCase();
-        
-        keywords.forEach(keyword => {
-            const k = keyword.toLowerCase();
-            
-            // A. Title Match - Critical Context
-            if (title.includes(k)) {
-                bonusScore += 10.0; 
+            if (!error && data) {
+                // We treat all docs as "relevant" in this mode
+                finalDocs = data.map(doc => ({
+                    ...doc,
+                    finalScore: 100 // Arbitrary high score since we force inclusion
+                }));
             }
+        } catch (e) {
+            console.error("Full Context Fetch Error", e);
+        }
+    } else {
+        // [⚡ Hybrid RAG Mode] (Original Logic)
+        let vectorDocs: any[] = [];
+        let keywordDocs: any[] = [];
+        
+        // 1. Vector Search
+        try {
+            const queryEmbedding = await this.generateEmbedding(query);
+            const { data: documents, error } = await supabase.rpc('match_documents', {
+                query_embedding: queryEmbedding,
+                match_threshold: 0.0, 
+                match_count: 100 
+            });
+            if (!error && documents) vectorDocs = documents;
+        } catch (e) {
+            console.error("Vector search failed", e);
+        }
 
-            // B. Frequency Analysis
-            const count = content.split(k).length - 1;
-            if (count > 0) {
-                bonusScore += (count * 0.5); 
+        // 2. Keyword Search
+        try {
+            const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+            const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
+
+            if (targetKeywords.length > 0) {
+                const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
+                const { data: kDocs, error: kError } = await supabase
+                    .from('documents')
+                    .select('id, content, metadata') 
+                    .or(conditions)
+                    .limit(50); 
+                if (!kError && kDocs) keywordDocs = kDocs;
+            }
+        } catch (e) {
+            console.error("Keyword search failed", e);
+        }
+
+        // 3. Merge & Deduplicate
+        const combinedDocsMap = new Map();
+        vectorDocs.forEach(doc => {
+            combinedDocsMap.set(doc.id, { ...doc, origin: 'vector', baseScore: doc.similarity });
+        });
+        keywordDocs.forEach(doc => {
+            if (!combinedDocsMap.has(doc.id)) {
+                combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
             }
         });
 
-        // C. Recency Scoring
-        if (doc.metadata.date) {
-            const docDate = new Date(doc.metadata.date);
-            const diffTime = Math.abs(now.getTime() - docDate.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        let allDocs = Array.from(combinedDocsMap.values());
+
+        // 4. Reranking
+        const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+        const now = new Date();
+
+        allDocs = allDocs.map((doc: any) => {
+            let bonusScore = 0;
+            const title = (doc.metadata.title || '').toLowerCase();
+            const content = (doc.content || '').toLowerCase();
             
-            if (diffDays <= 180) { // < 6 Months
-                bonusScore += 3.0;
-            } else if (diffDays <= 365) { // < 1 Year
-                bonusScore += 1.0;
+            keywords.forEach(keyword => {
+                const k = keyword.toLowerCase();
+                if (title.includes(k)) bonusScore += 10.0; 
+                const count = content.split(k).length - 1;
+                if (count > 0) bonusScore += (count * 0.5); 
+            });
+
+            if (doc.metadata.date) {
+                const docDate = new Date(doc.metadata.date);
+                const diffTime = Math.abs(now.getTime() - docDate.getTime());
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                if (diffDays <= 180) bonusScore += 3.0;
+                else if (diffDays <= 365) bonusScore += 1.0;
             }
-        }
 
-        return {
-            ...doc,
-            finalScore: (doc.baseScore || 0) + bonusScore
-        };
-    });
+            return { ...doc, finalScore: (doc.baseScore || 0) + bonusScore };
+        });
 
-    // 5. [Smart Cutoff] Top 25
-    allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
-    const finalDocs = allDocs.slice(0, 25);
+        allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
+        finalDocs = allDocs.slice(0, 25);
+    }
     
     // Debug Data
     const debugSnippets: DebugSnippet[] = finalDocs.map((doc: any) => ({
@@ -215,7 +221,7 @@ ${systemInstruction}
 
 [CONTEXT 1: My Database (The Truth)]
 * Use this for "## 🏰 철산랜드 데이터베이스".
-* **This is the Primary Source.** Prioritize documents with high recurrence of user keywords.
+* **This is the Primary Source.**
 * **If the answer is found here, provide EXTREME DETAIL.**
 ${internalContext}
 
