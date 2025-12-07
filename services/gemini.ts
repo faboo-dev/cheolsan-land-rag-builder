@@ -89,7 +89,7 @@ export class GeminiService {
         const res = await fetch(`${BACKEND_URL}/api/chat/full-context`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, systemInstruction })
+          body: JSON.stringify({ query, systemInstruction, useWebSearch }) // Pass web search flag
         });
         
         if (!res.ok) throw new Error("Server responded with error");
@@ -97,9 +97,9 @@ export class GeminiService {
         const data = await res.json();
         return {
           answer: data.answer,
-          sources: [], // Server handles full context, exact citations might be generic
-          webSources: [],
-          debugSnippets: [{ score: 100, text: `Processed ${data.docCount} documents on Server`, sourceTitle: 'SERVER FULL CONTEXT' }]
+          sources: data.sources || [], // Use sources returned by server
+          webSources: data.webSources || [], // Use web sources returned by server
+          debugSnippets: [{ score: 100, text: `Processed ${data.docCount} documents on Server (Full Mode)`, sourceTitle: 'SERVER FULL CONTEXT' }]
         };
       } catch (err) {
         console.warn("Server request failed, falling back to client-side logic", err);
@@ -131,7 +131,7 @@ export class GeminiService {
         let vectorDocs: any[] = [];
         let keywordDocs: any[] = [];
         
-        // 1. Vector Search
+        // 1. Vector Search (Broad)
         try {
             const queryEmbedding = await this.generateEmbedding(query);
             const { data: documents, error } = await supabase.rpc('match_documents', {
@@ -144,18 +144,21 @@ export class GeminiService {
             console.error("Vector search failed", e);
         }
 
-        // 2. Keyword Search
+        // 2. Keyword Search (Specific)
         try {
+            // Extract meaningful keywords (length > 1)
             const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+            // Prioritize longer keywords
             const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
 
             if (targetKeywords.length > 0) {
+                // ILIKE search for case-insensitive matching
                 const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
                 const { data: kDocs, error: kError } = await supabase
                     .from('documents')
                     .select('id, content, metadata') 
                     .or(conditions)
-                    .limit(100); 
+                    .limit(50); // Get top 50 keyword matches
                 if (!kError && kDocs) keywordDocs = kDocs;
             }
         } catch (e) {
@@ -169,18 +172,13 @@ export class GeminiService {
         });
         keywordDocs.forEach(doc => {
             if (!combinedDocsMap.has(doc.id)) {
-                const existing = combinedDocsMap.get(doc.id);
-                if (existing) {
-                    existing.baseScore += 0.2; 
-                } else {
-                    combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
-                }
+                combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 }); // Base score for keyword-only match
             }
         });
 
         let allDocs = Array.from(combinedDocsMap.values());
 
-        // 4. Reranking
+        // 4. Reranking (The Magic Sauce)
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
         const now = new Date();
 
@@ -191,23 +189,30 @@ export class GeminiService {
             
             keywords.forEach(keyword => {
                 const k = keyword.toLowerCase();
+                // [Title Match Boost]
                 if (title.includes(k)) bonusScore += 10.0; 
+                
+                // [Frequency Boost]
                 const count = content.split(k).length - 1;
                 if (count > 0) bonusScore += (count * 0.5); 
             });
 
+            // [Recency Boost]
             if (doc.metadata.date) {
                 const docDate = new Date(doc.metadata.date);
                 const diffTime = Math.abs(now.getTime() - docDate.getTime());
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                if (diffDays <= 180) bonusScore += 3.0; 
-                else if (diffDays <= 365) bonusScore += 1.0; 
+                if (diffDays <= 180) bonusScore += 3.0; // Within 6 months
+                else if (diffDays <= 365) bonusScore += 1.0; // Within 1 year
             }
 
             return { ...doc, finalScore: (doc.baseScore || 0) + bonusScore };
         });
 
+        // Sort by final score
         allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
+        
+        // [Smart Cutoff] Take top 25 high-quality docs
         finalDocs = allDocs.slice(0, 25);
     }
     
