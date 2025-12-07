@@ -111,7 +111,7 @@ ${msg.text?.substring(0, 100)}...
                     className="mt-0.5 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                 />
                 <label htmlFor="webSearchToggle" className="ml-2 text-xs text-blue-800 cursor-pointer select-none leading-snug">
-                    최신 AI웹검색을 통해 내용이나 가격등의 크로스체크를 원하시면 체크해주세요. <br/>
+                    최신 AI웹검색을 통해 내용이나 가격등의 크로스체크를 원하시면 체크해주세요.<br/>
                     <span className="text-blue-600 font-semibold">(대신 속도는 조금 더 걸립니다)</span>
                 </label>
             </div>
