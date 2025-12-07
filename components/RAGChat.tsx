@@ -20,6 +20,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
   const [isLoading, setIsLoading] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false); 
+  const [useFullContext, setUseFullContext] = useState(false); // New State for Full Context Mode
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -41,7 +42,13 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
     setIsLoading(true);
 
     try {
-      const result = await geminiService.getAnswer(userMessage.text!, systemInstruction, useWebSearch);
+      // Pass useFullContext to the service
+      const result = await geminiService.getAnswer(
+        userMessage.text!, 
+        systemInstruction, 
+        useWebSearch, 
+        useFullContext
+      );
       
       const aiMessage: ChatMessage = { 
         role: 'model', 
@@ -64,6 +71,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
 [철산랜드 RAG 튜닝 리포트]
 -------------------------
 질문: "${messages[messages.indexOf(msg) - 1]?.text}"
+모드: ${useFullContext ? '🔥통암기 모드' : '⚡일반 RAG'}
 웹검색 사용: ${useWebSearch ? 'ON' : 'OFF'}
 
 [페르소나]
@@ -169,12 +177,12 @@ ${msg.text?.substring(0, 100)}...
                 {isDebugMode && msg.debugSnippets && (
                     <div className="bg-gray-800 rounded-lg p-4 text-xs font-mono text-gray-300 shadow-inner">
                         <div className="flex justify-between items-center mb-2 border-b border-gray-700 pb-2">
-                            <span className="font-bold text-yellow-400">🔍 검색 정확도 분석 (RAG X-Ray)</span>
+                            <span className="font-bold text-yellow-400">🔍 분석 모드: {useFullContext ? '🔥통암기' : '⚡하이브리드'}</span>
                             <button 
                                 onClick={() => handleCopyReport(msg)}
                                 className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-white"
                             >
-                                📋 튜닝 리포트 복사
+                                📋 리포트 복사
                             </button>
                         </div>
                         <div className="space-y-3 max-h-60 overflow-y-auto">
@@ -208,7 +216,11 @@ ${msg.text?.substring(0, 100)}...
                         <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
                     </div>
                     <span className="text-sm text-gray-500">
-                        {useWebSearch ? '최신 정보를 검색하고 데이터를 분석 중입니다... (약간 소요됨)' : '철산랜드 데이터를 분석 중입니다...'}
+                        {useFullContext 
+                          ? '모든 데이터를 읽는 중입니다... (정확도 100%, 시간 소요됨)' 
+                          : useWebSearch 
+                            ? '최신 정보를 검색하고 데이터를 분석 중입니다...' 
+                            : '철산랜드 데이터를 분석 중입니다...'}
                     </span>
                 </div>
             </div>
@@ -216,18 +228,37 @@ ${msg.text?.substring(0, 100)}...
       </div>
 
       <div className="p-4 bg-white border-t border-gray-200">
-        {/* Web Search Toggle - Moved near input for better visibility in embed mode */}
-        <div className="flex items-center mb-3">
-            <input 
-                type="checkbox" 
-                id="webSearchToggle"
-                checked={useWebSearch} 
-                onChange={(e) => setUseWebSearch(e.target.checked)}
-                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
-            />
-            <label htmlFor="webSearchToggle" className="ml-2 text-xs text-gray-700 cursor-pointer select-none">
-                최신 AI웹검색을 통해 <strong>1. 내용 검증</strong>이나 <strong>2. 현재 가격 정보 확인</strong>을 원하시면 체크해주세요. <span className="text-blue-600">(속도 느려짐)</span>
-            </label>
+        <div className="flex flex-col gap-2 mb-3">
+            {/* Full Context Toggle */}
+            <div className="flex items-center">
+                <input 
+                    type="checkbox" 
+                    id="fullContextToggle"
+                    checked={useFullContext} 
+                    onChange={(e) => {
+                        setUseFullContext(e.target.checked);
+                        if (e.target.checked) setUseWebSearch(false); // Disable web search if full context is on (optional, but cleaner)
+                    }}
+                    className="h-4 w-4 text-red-600 border-gray-300 rounded focus:ring-red-500 cursor-pointer"
+                />
+                <label htmlFor="fullContextToggle" className="ml-2 text-xs text-red-700 font-bold cursor-pointer select-none">
+                    🔥 전체 데이터 통암기 모드 (DB의 모든 글을 다 읽고 답합니다. 가장 정확하지만 느립니다.)
+                </label>
+            </div>
+
+            {/* Web Search Toggle */}
+            <div className="flex items-center">
+                <input 
+                    type="checkbox" 
+                    id="webSearchToggle"
+                    checked={useWebSearch} 
+                    onChange={(e) => setUseWebSearch(e.target.checked)}
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                />
+                <label htmlFor="webSearchToggle" className="ml-2 text-xs text-gray-700 cursor-pointer select-none">
+                    최신 AI웹검색을 통해 <strong>1. 내용 검증</strong>이나 <strong>2. 현재 가격 정보 확인</strong>을 원하시면 체크해주세요. <span className="text-blue-600">(속도 느려짐)</span>
+                </label>
+            </div>
         </div>
 
         <form onSubmit={handleSend}>
@@ -236,7 +267,7 @@ ${msg.text?.substring(0, 100)}...
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={useWebSearch ? "궁금한 내용을 입력하세요 (웹 검색 ON)" : "궁금한 내용을 입력하세요 (빠른 검색)"}
+                placeholder={useFullContext ? "질문하세요 (통암기 모드 ON)" : "궁금한 내용을 입력하세요"}
                 className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent shadow-sm"
                 disabled={isLoading}
             />
