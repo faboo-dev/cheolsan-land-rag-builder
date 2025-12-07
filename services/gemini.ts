@@ -72,33 +72,30 @@ export class GeminiService {
     webSources: any[];
     debugSnippets: DebugSnippet[]; 
   }> {
-    // 1. [Dual Retrieval Strategy]
-    // Strategy A: Vector Search (The Net) - Captures semantic meaning
-    // Strategy B: Keyword Search (The Harpoon) - Captures exact terms even if vector score is low
-
+    
     let vectorDocs: any[] = [];
     let keywordDocs: any[] = [];
-
-    // --- Execution A: Vector Search (Wide Net) ---
+    
+    // 1. [Wide Net Strategy] Vector Search (Fetch 100 to avoid missing context)
     try {
         const queryEmbedding = await this.generateEmbedding(query);
         const { data: documents, error } = await supabase.rpc('match_documents', {
             query_embedding: queryEmbedding,
-            match_threshold: 0.0, 
-            match_count: 100 // Fetch 100 to catch everything initially
+            match_threshold: 0.0, // No threshold, get everything relevant
+            match_count: 100 
         });
         if (!error && documents) vectorDocs = documents;
     } catch (e) {
         console.error("Vector search failed", e);
     }
 
-    // --- Execution B: Keyword Search (Direct DB Query) ---
+    // 2. [Harpoon Strategy] Keyword Search with Frequency Analysis
     try {
-        // Extract meaningful keywords (length > 1) to fire the harpoon
+        // Filter out short words and special chars
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
         
-        // Pick top 3 longest keywords to avoid overly broad queries
-        const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 3);
+        // Use top 5 keywords for broader catch
+        const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
 
         if (targetKeywords.length > 0) {
             const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
@@ -107,7 +104,7 @@ export class GeminiService {
                 .from('documents')
                 .select('id, content, metadata') 
                 .or(conditions)
-                .limit(30); // Keyword match 30 docs
+                .limit(50); // Get up to 50 keyword matches
             
             if (!kError && kDocs) keywordDocs = kDocs;
         }
@@ -115,7 +112,7 @@ export class GeminiService {
         console.error("Keyword search failed", e);
     }
 
-    // --- Merge & Deduplicate ---
+    // 3. Merge & Deduplicate
     const combinedDocsMap = new Map();
 
     vectorDocs.forEach(doc => {
@@ -124,13 +121,14 @@ export class GeminiService {
 
     keywordDocs.forEach(doc => {
         if (!combinedDocsMap.has(doc.id)) {
+            // Give keywords a base score if they weren't in vector results
             combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
         }
     });
 
     let allDocs = Array.from(combinedDocsMap.values());
 
-    // --- Smart Reranking Logic (Hybrid Score) ---
+    // 4. [Smart Reranking] Frequency & Recency Boosting
     const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
     const now = new Date();
 
@@ -139,14 +137,24 @@ export class GeminiService {
         const title = (doc.metadata.title || '').toLowerCase();
         const content = (doc.content || '').toLowerCase();
         
-        // 1. Keyword Relevance
         keywords.forEach(keyword => {
             const k = keyword.toLowerCase();
-            if (title.includes(k)) bonusScore += 10.0; // Title Match: Huge Boost
-            if (content.includes(k)) bonusScore += 1.0; // Content Match: Minor Boost
+            
+            // A. Title Match (Critical Context) - Huge Boost
+            if (title.includes(k)) {
+                bonusScore += 10.0; 
+            }
+
+            // B. Frequency Analysis (Depth of Content)
+            // Count how many times the keyword appears in content
+            // Using split for simple counting
+            const count = content.split(k).length - 1;
+            if (count > 0) {
+                bonusScore += (count * 0.5); // +0.5 per mention
+            }
         });
 
-        // 2. Recency Scoring (Freshness Boost)
+        // C. Recency Scoring (Freshness Boost)
         if (doc.metadata.date) {
             const docDate = new Date(doc.metadata.date);
             const diffTime = Math.abs(now.getTime() - docDate.getTime());
@@ -165,8 +173,8 @@ export class GeminiService {
         };
     });
 
-    // Sort by finalScore and CUTOFF to Top 25 (Smart Filtering)
-    // Reduces noise and improves speed
+    // 5. [Smart Cutoff] Top 25
+    // Drop the tail (noise) to improve speed and focus
     allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
     const finalDocs = allDocs.slice(0, 25);
     
@@ -174,7 +182,7 @@ export class GeminiService {
     const debugSnippets: DebugSnippet[] = finalDocs.map((doc: any) => ({
       score: doc.finalScore, 
       text: doc.content,
-      sourceTitle: `[${doc.origin === 'keyword' ? '키워드' : '유사도'}] ${doc.metadata.title} (${doc.metadata.date})`
+      sourceTitle: `[${doc.finalScore.toFixed(1)}] ${doc.metadata.title} (${doc.metadata.date})`
     }));
 
     // Format Internal Context
@@ -193,26 +201,27 @@ Content: ${doc.content}
       type: doc.metadata.type
     })))).map((s: any) => JSON.parse(s));
 
-    // 2. Fetch Web Info (Conditional)
+    // Web Search
     let webResult: { text: string; sources: any[] } = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
-    
     if (useWebSearch) {
         webResult = await this.fetchWebInfo(query);
     }
 
-    // 3. Final Synthesis
+    // Final Synthesis Prompt
     const finalPrompt = `
 ${systemInstruction}
 
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
 1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
-2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end.** 
-3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
+2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end of your response.** 
+   (e.g., "참고 자료:", "출처:" list at the bottom is FORBIDDEN).
+3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences immediately after the fact.
 4. DO NOT add filler text like "Okay, here is the info". Start directly with the header.
 
 [CONTEXT 1: My Database (The Truth)]
 * Use this for "## 🏰 철산랜드 데이터베이스".
-* If specific keywords from the user question appear here, prioritize this data.
+* **Prioritize documents with high recurrence of user keywords.**
+* **If the answer is found here, provide EXTREME DETAIL.**
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
@@ -225,9 +234,9 @@ ${query}
 
 [Format Guide]
 1. Start with "## 🏰 철산랜드 데이터베이스".
-2. If Context 2 is Active (Web Search ON), add "## 🌐 최신 AI 검색 크로스체크" section at the end. If Disabled, SKIP it.
+2. If Context 2 is Active (Web Search ON), add "## 🌐 최신 AI 검색 크로스체크" section at the end.
 3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
-4. **STOP** after finishing the content. DO NOT add a list of sources.
+4. **STOP** immediately after the last sentence. NO footer lists.
 `;
 
     const response = await this.ai.models.generateContent({
