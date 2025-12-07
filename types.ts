@@ -30,11 +30,18 @@ export interface DebugSnippet {
   sourceTitle: string; // 출처 제목
 }
 
+export interface CitationSource {
+  title: string;
+  url: string;
+  date: string;
+  type?: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   text?: string; // 통합된 답변 텍스트
   
-  sources?: { title: string; url: string; date: string }[];
+  sources?: CitationSource[];
   webSources?: { title: string; url: string }[]; 
   
   // 진단 데이터
