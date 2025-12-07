@@ -97,7 +97,11 @@ function extractSources(documents) {
             });
         }
     });
-    return Array.from(uniqueSourcesMap.values());
+    // Convert to array and assign an index (1-based)
+    return Array.from(uniqueSourcesMap.values()).map((source, index) => ({
+        ...source,
+        index: index + 1
+    }));
 }
 
 // --- Routes ---
@@ -126,33 +130,45 @@ app.post('/api/chat/full-context', async (req, res) => {
 
     const docCount = documents ? documents.length : 0;
     
+    // Prepare Sources with Indices
+    const sources = extractSources(documents);
+    const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
+
     // Create Context String
-    const contextText = documents.map(doc => `
+    const contextText = documents.map(doc => {
+        const idx = sourceMap.get(doc.metadata.url || doc.metadata.title) || '?';
+        return `
+[Source ID: ${idx}]
 [Title: ${doc.metadata.title}]
 [Date: ${doc.metadata.date}]
 [Content]: ${doc.content}
-`).join('\n\n');
+`;
+    }).join('\n\n');
 
     // Web Search
     let webContext = "";
     let webSources = [];
     if (useWebSearch) {
         const webResult = await fetchWebInfo(query);
-        webContext = `[CONTEXT 2: Web Search]\n${webResult.text}`;
+        webContext = `[CONTEXT 2: Web Search Results (For Cross-Check)]\n${webResult.text}`;
         webSources = webResult.sources;
     }
 
     const finalPrompt = `
 ${systemInstruction}
-[NEGATIVE CONSTRAINTS]
-1. NO HTML tags. Markdown only.
-2. NO Reference list at bottom.
-3. INLINE citations only.
 
-[CONTEXT 1: Full Database]
+[STRICT OUTPUT RULES]
+1. **Citation Style**: Use inline citations like [[1]], [[2]]. Do NOT use [Title](URL).
+   - Match the [Source ID: X] provided in the context.
+   - Example: "This place is great [[1]]."
+2. **No Duplication**: Do NOT repeat the content from "Iron Land Database" in the "Cross Check" section.
+3. **Markdown Only**: NO HTML tags allowed. Use Markdown tables if needed.
+4. **No Reference List**: Do NOT list references at the bottom. The frontend handles that.
+
+[CONTEXT 1: My Database (Primary Source)]
 ${contextText}
 
-${webContext}
+${useWebSearch ? webContext : ""}
 
 [QUESTION]
 ${query}
@@ -166,7 +182,7 @@ ${query}
     res.json({ 
       answer: response.text, 
       docCount: docCount,
-      sources: extractSources(documents),
+      sources: sources,
       webSources: webSources
     });
 
@@ -196,8 +212,15 @@ app.post('/api/chat/file-api', async (req, res) => {
     if (error) throw error;
     const docCount = documents.length;
 
+    // Prepare Sources for frontend
+    const sources = extractSources(documents);
+    // Create a map to inject indices into the file content for easier citation
+    const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
+
     // 2. Create File Content
+    // We inject "SOURCE_INDEX: X" so Gemini knows which number to cite.
     const fileContent = documents.map(doc => `
+SOURCE_INDEX: [[${sourceMap.get(doc.metadata.url || doc.metadata.title) || '?'}]]
 SOURCE_TITLE: ${doc.metadata.title}
 SOURCE_DATE: ${doc.metadata.date}
 SOURCE_URL: ${doc.metadata.url}
@@ -229,20 +252,22 @@ ${doc.content}
     if (fileState === 'FAILED') throw new Error("File upload failed processing");
     console.log(`[File API] Upload Ready: ${uploadResult.file.uri}`);
 
-    // 5. Generate with File
+    // 5. Pre-fetch Web Search (Injection Method)
+    // Mixing File API + Tools sometimes causes the model to ignore one context.
+    // Injecting the search result as TEXT into the prompt is more reliable for Cross-Checking.
     let webContextText = "";
     let webSources = [];
-    let tools = [];
 
     if (useWebSearch) {
-        // We can't easily mix File + Tools in one turn perfectly in all models, 
-        // but for Gemini 1.5/2.5 it usually works. 
-        // However, standard tools might conflict with file context in some SDK versions.
-        // We will do a separate search call for simplicity and inject text if needed, 
-        // OR try using tools config. Let's use tools config.
-        tools = [{ googleSearch: {} }];
+        const webResult = await fetchWebInfo(query);
+        webContextText = `
+[CONTEXT 2: Web Search Results (For Cross-Check)]
+${webResult.text}
+        `;
+        webSources = webResult.sources;
     }
 
+    // 6. Generate with File + Web Context
     const contents = [
         {
             role: 'user',
@@ -251,14 +276,15 @@ ${doc.content}
                 { text: `
 ${systemInstruction}
 
-[STRICT RULES]
-1. Use the uploaded file as your SOURCE OF TRUTH for "## 🏰 철산랜드 데이터베이스".
-2. Create links using 'SOURCE_URL'.
-3. Convert timestamps to links.
-4. NO HTML. Markdown only.
-5. NO Reference list at bottom.
+[STRICT OUTPUT RULES]
+1. **Citation Style**: Use the "SOURCE_INDEX" provided in the file. Format: [[1]], [[2]]. 
+   - Do NOT use [Title](URL).
+   - Example: "According to the guide [[1]], the price is..."
+2. **No Duplication**: Do NOT repeat the same information in the "Cross Check" section if it matches the database. Only mention differences or new info.
+3. **Markdown Only**: NO HTML tags.
+4. **No Reference List**: Do NOT list references at the bottom.
 
-${useWebSearch ? 'Also perform a Google Search for "## 🌐 최신 AI 검색 크로스체크" to validate info and prices.' : ''}
+${webContextText}
 
 [QUESTION]
 ${query}
@@ -270,10 +296,9 @@ ${query}
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: contents,
-        config: useWebSearch ? { tools } : undefined
     });
 
-    // 6. Cleanup Remote File (Async)
+    // 7. Cleanup Remote File (Async)
     (async () => {
         try {
             await ai.files.delete({ name: uploadResult.file.name });
@@ -284,8 +309,8 @@ ${query}
     res.json({
         answer: response.text,
         docCount: docCount,
-        sources: extractSources(documents),
-        webSources: [] // Web sources come embedded when using tools
+        sources: sources, // Send formatted sources with indices
+        webSources: webSources
     });
 
   } catch (error) {
