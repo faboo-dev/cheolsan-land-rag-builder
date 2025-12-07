@@ -10,6 +10,8 @@ const CHAT_MODEL = "gemini-2.5-flash";
 // @ts-ignore
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 
+export type SearchMode = 'rag' | 'full-text' | 'file-api';
+
 export class GeminiService {
   private ai: GoogleGenAI;
 
@@ -27,30 +29,19 @@ export class GeminiService {
           model: EMBEDDING_MODEL,
           contents: cleanText,
         });
-
-        const embeddingValues = result.embeddings?.[0]?.values;
-
-        if (!embeddingValues) {
-          console.warn("Embedding generated but no values found.");
-          return [];
-        }
-
-        return embeddingValues;
+        return result.embeddings?.[0]?.values || [];
     } catch (error) {
         console.error("Embedding Error:", error);
         throw error;
     }
   }
 
-  // --- Web Search Helper ---
   private async fetchWebInfo(query: string): Promise<{ text: string; sources: any[] }> {
     try {
       const response = await this.ai.models.generateContent({
         model: CHAT_MODEL,
         contents: `Search the web for the latest information regarding: "${query}". Focus on prices, operating hours, and recent reviews.`,
-        config: {
-          tools: [{ googleSearch: {} }],
-        },
+        config: { tools: [{ googleSearch: {} }] },
       });
 
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -58,22 +49,18 @@ export class GeminiService {
         .map((chunk: any) => chunk.web ? { title: chunk.web.title, url: chunk.web.uri } : null)
         .filter((item: any) => item !== null);
 
-      return {
-        text: response.text || "웹 검색 결과를 가져올 수 없습니다.",
-        sources: webSources
-      };
+      return { text: response.text || "웹 검색 불가", sources: webSources };
     } catch (e) {
       console.error("Web Search Error", e);
-      return { text: "(웹 검색 실패 - 데이터베이스 정보로만 답변합니다)", sources: [] };
+      return { text: "(웹 검색 실패)", sources: [] };
     }
   }
 
-  // --- Main Orchestrator ---
   async getAnswer(
       query: string, 
       systemInstruction: string, 
       useWebSearch: boolean, 
-      useFullContext: boolean = false
+      mode: SearchMode = 'rag'
     ): Promise<{ 
     answer: string; 
     sources: any[];
@@ -81,154 +68,97 @@ export class GeminiService {
     debugSnippets: DebugSnippet[]; 
   }> {
     
-    // [🚀 SERVER-SIDE OFFLOADING]
-    // If Full Context Mode is ON and Backend is configured, let the server handle it.
-    if (useFullContext && BACKEND_URL) {
+    // [🚀 SERVER-SIDE: File API & Full Text]
+    if ((mode === 'full-text' || mode === 'file-api') && BACKEND_URL) {
+      const endpoint = mode === 'file-api' ? '/api/chat/file-api' : '/api/chat/full-context';
       try {
-        console.log("🚀 Requesting Full Context Answer from Server...");
-        const res = await fetch(`${BACKEND_URL}/api/chat/full-context`, {
+        console.log(`🚀 Requesting Server Mode: ${mode}`);
+        const res = await fetch(`${BACKEND_URL}${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, systemInstruction, useWebSearch }) // Pass web search flag
+          body: JSON.stringify({ query, systemInstruction, useWebSearch })
         });
         
-        if (!res.ok) throw new Error("Server responded with error");
-        
+        if (!res.ok) throw new Error("Server Error");
         const data = await res.json();
+        
         return {
           answer: data.answer,
-          sources: data.sources || [], // Use sources returned by server
-          webSources: data.webSources || [], // Use web sources returned by server
-          debugSnippets: [{ score: 100, text: `Processed ${data.docCount} documents on Server (Full Mode)`, sourceTitle: 'SERVER FULL CONTEXT' }]
+          sources: data.sources || [],
+          webSources: data.webSources || [],
+          debugSnippets: [{ score: 100, text: `Processed ${data.docCount} docs via ${mode === 'file-api' ? 'Google File API' : 'Full Text Injection'}`, sourceTitle: `SERVER MODE: ${mode.toUpperCase()}` }]
         };
       } catch (err) {
-        console.warn("Server request failed, falling back to client-side logic", err);
-        // Fallback to existing client-side logic below...
+        console.warn("Server request failed", err);
+        return { answer: "서버 연결 실패. 관리자에게 문의하세요.", sources: [], webSources: [], debugSnippets: [] };
       }
     }
 
-    let finalDocs: any[] = [];
+    // [⚡ CLIENT-SIDE: Hybrid RAG]
+    let vectorDocs: any[] = [];
+    let keywordDocs: any[] = [];
     
-    if (useFullContext) {
-        // [🔥 Client-Side Full Context Fallback]
-        try {
-            const { data, error } = await supabase
-                .from('documents')
-                .select('id, content, metadata')
-                .limit(10000); 
-            
-            if (!error && data) {
-                finalDocs = data.map(doc => ({
-                    ...doc,
-                    finalScore: 100 
-                }));
-            }
-        } catch (e) {
-            console.error("Full Context Fetch Error", e);
-        }
-    } else {
-        // [⚡ Hybrid RAG Mode]
-        let vectorDocs: any[] = [];
-        let keywordDocs: any[] = [];
-        
-        // 1. Vector Search (Broad)
-        try {
-            const queryEmbedding = await this.generateEmbedding(query);
-            const { data: documents, error } = await supabase.rpc('match_documents', {
-                query_embedding: queryEmbedding,
-                match_threshold: 0.0, 
-                match_count: 100 
-            });
-            if (!error && documents) vectorDocs = documents;
-        } catch (e) {
-            console.error("Vector search failed", e);
-        }
-
-        // 2. Keyword Search (Specific)
-        try {
-            // Extract meaningful keywords (length > 1)
-            const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
-            // Prioritize longer keywords
-            const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
-
-            if (targetKeywords.length > 0) {
-                // ILIKE search for case-insensitive matching
-                const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
-                const { data: kDocs, error: kError } = await supabase
-                    .from('documents')
-                    .select('id, content, metadata') 
-                    .or(conditions)
-                    .limit(50); // Get top 50 keyword matches
-                if (!kError && kDocs) keywordDocs = kDocs;
-            }
-        } catch (e) {
-            console.error("Keyword search failed", e);
-        }
-
-        // 3. Merge & Deduplicate
-        const combinedDocsMap = new Map();
-        vectorDocs.forEach(doc => {
-            combinedDocsMap.set(doc.id, { ...doc, origin: 'vector', baseScore: doc.similarity });
+    // 1. Vector Search
+    try {
+        const queryEmbedding = await this.generateEmbedding(query);
+        const { data } = await supabase.rpc('match_documents', {
+            query_embedding: queryEmbedding,
+            match_threshold: 0.0, 
+            match_count: 100 
         });
-        keywordDocs.forEach(doc => {
-            if (!combinedDocsMap.has(doc.id)) {
-                combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 }); // Base score for keyword-only match
-            }
-        });
+        if (data) vectorDocs = data;
+    } catch (e) { console.error("Vector Error", e); }
 
-        let allDocs = Array.from(combinedDocsMap.values());
-
-        // 4. Reranking (The Magic Sauce)
+    // 2. Keyword Search
+    try {
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
-        const now = new Date();
+        const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
+        if (targetKeywords.length > 0) {
+            const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
+            const { data } = await supabase.from('documents').select('id, content, metadata').or(conditions).limit(50);
+            if (data) keywordDocs = data;
+        }
+    } catch (e) { console.error("Keyword Error", e); }
 
-        allDocs = allDocs.map((doc: any) => {
-            let bonusScore = 0;
-            const title = (doc.metadata.title || '').toLowerCase();
-            const content = (doc.content || '').toLowerCase();
-            
-            keywords.forEach(keyword => {
-                const k = keyword.toLowerCase();
-                // [Title Match Boost]
-                if (title.includes(k)) bonusScore += 10.0; 
-                
-                // [Frequency Boost]
-                const count = content.split(k).length - 1;
-                if (count > 0) bonusScore += (count * 0.5); 
-            });
+    // 3. Merge & Rerank
+    const combinedDocsMap = new Map();
+    vectorDocs.forEach(doc => combinedDocsMap.set(doc.id, { ...doc, baseScore: doc.similarity }));
+    keywordDocs.forEach(doc => {
+        if (!combinedDocsMap.has(doc.id)) combinedDocsMap.set(doc.id, { ...doc, baseScore: 0.5 });
+    });
 
-            // [Recency Boost]
-            if (doc.metadata.date) {
-                const docDate = new Date(doc.metadata.date);
-                const diffTime = Math.abs(now.getTime() - docDate.getTime());
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                if (diffDays <= 180) bonusScore += 3.0; // Within 6 months
-                else if (diffDays <= 365) bonusScore += 1.0; // Within 1 year
-            }
+    let allDocs = Array.from(combinedDocsMap.values());
+    const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
+    const now = new Date();
 
-            return { ...doc, finalScore: (doc.baseScore || 0) + bonusScore };
+    allDocs = allDocs.map((doc: any) => {
+        let bonusScore = 0;
+        const title = (doc.metadata.title || '').toLowerCase();
+        const content = (doc.content || '').toLowerCase();
+        
+        keywords.forEach(keyword => {
+            const k = keyword.toLowerCase();
+            if (title.includes(k)) bonusScore += 10.0; 
+            const count = content.split(k).length - 1;
+            if (count > 0) bonusScore += (count * 0.5); 
         });
 
-        // Sort by final score
-        allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
-        
-        // [Smart Cutoff] Take top 25 high-quality docs
-        finalDocs = allDocs.slice(0, 25);
-    }
-    
-    // Debug Data
-    const debugSnippets: DebugSnippet[] = finalDocs.map((doc: any) => ({
-      score: doc.finalScore, 
-      text: doc.content,
-      sourceTitle: `[${doc.finalScore.toFixed(1)}] ${doc.metadata.title} (${doc.metadata.date})`
-    }));
+        if (doc.metadata.date) {
+            const diffDays = Math.ceil(Math.abs(now.getTime() - new Date(doc.metadata.date).getTime()) / (1000 * 3600 * 24));
+            if (diffDays <= 180) bonusScore += 3.0;
+            else if (diffDays <= 365) bonusScore += 1.0;
+        }
+        return { ...doc, finalScore: (doc.baseScore || 0) + bonusScore };
+    });
+
+    allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
+    const finalDocs = allDocs.slice(0, 25);
 
     const internalContext = finalDocs.map((doc: any) => `
-[ID: ${doc.metadata.sourceId}]
-Title: ${doc.metadata.title}
-Date: ${doc.metadata.date}
-URL: ${doc.metadata.url}
-Content: ${doc.content}
+[Title: ${doc.metadata.title}]
+[Date: ${doc.metadata.date}]
+[URL: ${doc.metadata.url}]
+${doc.content}
     `).join('\n\n');
 
     const uniqueSources = Array.from(new Set(finalDocs.map((doc: any) => JSON.stringify({
@@ -238,44 +168,25 @@ Content: ${doc.content}
       type: doc.metadata.type
     })))).map((s: any) => JSON.parse(s));
 
-    let webResult: { text: string; sources: any[] } = { text: "Web Search is Disabled by User.", sources: [] };
-    if (useWebSearch) {
-        webResult = await this.fetchWebInfo(query);
-    }
+    let webResult = { text: "Web Search Disabled", sources: [] };
+    if (useWebSearch) webResult = await this.fetchWebInfo(query);
 
     const finalPrompt = `
 ${systemInstruction}
 
-[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
-1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
-2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' list at the bottom of your response.** 
-   (e.g., Do NOT output "참고 자료:", "출처:", "References" section at the end. This is handled by the UI).
-3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences immediately after the fact.
-4. DO NOT add filler text like "Okay, here is the info". Start directly with the header.
+[NEGATIVE CONSTRAINTS]
+1. NO HTML tags. Markdown only.
+2. NO Reference list at bottom.
+3. INLINE citations only.
 
-[CONTEXT 1: My Database (The Truth)]
-* Use this for "## 🏰 철산랜드 데이터베이스".
-* **This is the Primary Source.**
-* **If the answer is found here, provide EXTREME DETAIL.**
-* Mode: ${useFullContext ? "FULL CONTEXT (Reading ALL Data)" : "RAG (Retrieved Data)"}
+[CONTEXT 1: My Database]
 ${internalContext}
 
-[CONTEXT 2: Web Search (For Cross-Check)]
-* Use this for "## 🌐 최신 AI 검색 크로스체크".
-* Status: ${useWebSearch ? "Active" : "Disabled"}
-* **OBJECTIVE OF THIS SECTION:**
-  1. **Validate** if the info in 'My Database' is still correct (e.g., "Is this restaurant still open?").
-  2. **Find Prices** or details if 'My Database' is missing them or they are outdated.
-${webResult.text}
+[CONTEXT 2: Web Search]
+${useWebSearch ? webResult.text : "Disabled"}
 
-[User Question]
+[QUESTION]
 ${query}
-
-[Format Guide]
-1. Start with "## 🏰 철산랜드 데이터베이스".
-2. If Context 2 is Active (Web Search ON), add "## 🌐 최신 AI 검색 크로스체크" section at the end.
-3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
-4. **STOP** immediately after the last sentence. NO footer lists.
 `;
 
     const response = await this.ai.models.generateContent({
@@ -284,10 +195,10 @@ ${query}
     });
 
     return {
-      answer: response.text || "답변을 생성할 수 없습니다.",
+      answer: response.text || "No answer generated.",
       sources: uniqueSources,
       webSources: webResult.sources,
-      debugSnippets
+      debugSnippets: finalDocs.map((doc: any) => ({ score: doc.finalScore, text: doc.content, sourceTitle: doc.metadata.title }))
     };
   }
 }
