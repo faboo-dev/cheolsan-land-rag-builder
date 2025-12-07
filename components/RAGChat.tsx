@@ -84,36 +84,19 @@ ${msg.text?.substring(0, 100)}...
     <div className={`flex flex-col ${isEmbed ? 'h-screen' : 'h-[650px] rounded-lg shadow-md border border-gray-200'} bg-white`}>
       {/* Chat Header */}
       {!isEmbed && (
-        <div className="p-4 border-b bg-gray-50 rounded-t-lg space-y-3">
-            <div className="flex justify-between items-center">
-                <div>
-                    <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇</h2>
-                    <p className="text-xs text-gray-500">사용자 정의 페르소나 적용됨</p>
-                </div>
-                <div className="flex items-center space-x-2">
-                    <span className="text-xs font-medium text-gray-600">🔍 분석 모드</span>
-                    <button 
-                        onClick={() => setIsDebugMode(!isDebugMode)}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isDebugMode ? 'bg-primary' : 'bg-gray-200'}`}
-                    >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${isDebugMode ? 'translate-x-6' : 'translate-x-1'}`} />
-                    </button>
-                </div>
+        <div className="p-4 border-b bg-gray-50 rounded-t-lg flex justify-between items-center">
+            <div>
+                <h2 className="font-bold text-gray-800">🤖 철산랜드 AI 챗봇</h2>
+                <p className="text-xs text-gray-500">사용자 정의 페르소나 적용됨</p>
             </div>
-            
-            {/* Web Search Checkbox */}
-            <div className="flex items-start p-2 bg-blue-50 rounded border border-blue-100">
-                <input 
-                    type="checkbox" 
-                    id="webSearchToggle"
-                    checked={useWebSearch} 
-                    onChange={(e) => setUseWebSearch(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <label htmlFor="webSearchToggle" className="ml-2 text-xs text-blue-800 cursor-pointer select-none leading-snug">
-                    최신 AI웹검색을 통해 내용이나 가격등의 크로스체크를 원하시면 체크해주세요.<br/>
-                    <span className="text-blue-600 font-semibold">(대신 속도는 조금 더 걸립니다)</span>
-                </label>
+            <div className="flex items-center space-x-2">
+                <span className="text-xs font-medium text-gray-600">🔍 분석 모드</span>
+                <button 
+                    onClick={() => setIsDebugMode(!isDebugMode)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${isDebugMode ? 'bg-primary' : 'bg-gray-200'}`}
+                >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition duration-200 ease-in-out ${isDebugMode ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
             </div>
         </div>
       )}
@@ -232,25 +215,41 @@ ${msg.text?.substring(0, 100)}...
         )}
       </div>
 
-      <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-200">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={useWebSearch ? "궁금한 내용을 입력하세요 (웹 검색 ON)" : "궁금한 내용을 입력하세요 (빠른 검색)"}
-            className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent shadow-sm"
-            disabled={isLoading}
-          />
-          <button 
-            type="submit" 
-            disabled={isLoading || !input.trim()}
-            className="bg-primary text-white px-6 py-3 rounded-lg font-bold hover:bg-secondary disabled:bg-gray-300 disabled:cursor-not-allowed shadow transition-colors"
-          >
-            전송
-          </button>
+      <div className="p-4 bg-white border-t border-gray-200">
+        {/* Web Search Toggle - Moved near input for better visibility in embed mode */}
+        <div className="flex items-center mb-3">
+            <input 
+                type="checkbox" 
+                id="webSearchToggle"
+                checked={useWebSearch} 
+                onChange={(e) => setUseWebSearch(e.target.checked)}
+                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+            />
+            <label htmlFor="webSearchToggle" className="ml-2 text-xs text-gray-700 cursor-pointer select-none">
+                최신 AI웹검색을 통해 <strong>1. 내용 검증</strong>이나 <strong>2. 현재 가격 정보 확인</strong>을 원하시면 체크해주세요. <span className="text-blue-600">(속도 느려짐)</span>
+            </label>
         </div>
-      </form>
+
+        <form onSubmit={handleSend}>
+            <div className="flex gap-2">
+            <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={useWebSearch ? "궁금한 내용을 입력하세요 (웹 검색 ON)" : "궁금한 내용을 입력하세요 (빠른 검색)"}
+                className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent shadow-sm"
+                disabled={isLoading}
+            />
+            <button 
+                type="submit" 
+                disabled={isLoading || !input.trim()}
+                className="bg-primary text-white px-6 py-3 rounded-lg font-bold hover:bg-secondary disabled:bg-gray-300 disabled:cursor-not-allowed shadow transition-colors"
+            >
+                전송
+            </button>
+            </div>
+        </form>
+      </div>
     </div>
   );
 };
