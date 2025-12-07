@@ -47,6 +47,34 @@ if (!API_KEY) {
   }
 }
 
+// --- Helper: Web Search ---
+async function fetchWebInfo(query) {
+  if (!ai) return { text: "", sources: [] };
+  try {
+    console.log(`[Server] Performing Web Search for: ${query}`);
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Search the web for the latest information regarding: "${query}". Focus on prices, operating hours, and recent reviews.`,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
+
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const webSources = groundingChunks
+      .map((chunk) => chunk.web ? { title: chunk.web.title, url: chunk.web.uri } : null)
+      .filter((item) => item !== null);
+
+    return {
+      text: response.text || "웹 검색 결과를 가져올 수 없습니다.",
+      sources: webSources
+    };
+  } catch (e) {
+    console.error("[Server] Web Search Error", e);
+    return { text: "(웹 검색 실패 - 데이터베이스 정보로만 답변합니다)", sources: [] };
+  }
+}
+
 // --- Routes ---
 
 app.get('/', (req, res) => {
@@ -73,7 +101,7 @@ app.post('/api/chat/full-context', async (req, res) => {
       });
     }
 
-    const { query, systemInstruction } = req.body;
+    const { query, systemInstruction, useWebSearch } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: 'Query is required' });
@@ -94,43 +122,89 @@ app.post('/api/chat/full-context', async (req, res) => {
     console.log(`[Full Context] Fetched ${docCount} documents.`);
 
     if (docCount === 0) {
-        return res.json({ answer: "데이터베이스에 저장된 내용이 없습니다.", docCount: 0 });
+        return res.json({ answer: "데이터베이스에 저장된 내용이 없습니다.", docCount: 0, sources: [], webSources: [] });
     }
 
-    // 2. Prepare Context String
+    // 2. Prepare Context String & Extract Sources
     const contextText = documents.map(doc => `
 [Title: ${doc.metadata.title}]
 [Date: ${doc.metadata.date}]
 [Content]: ${doc.content}
 `).join('\n\n');
 
-    // 3. Construct Prompt
+    // Extract unique sources for UI buttons
+    const uniqueSourcesMap = new Map();
+    documents.forEach(doc => {
+        const meta = doc.metadata;
+        // Use URL as key for uniqueness, fallback to title
+        const key = meta.url || meta.title; 
+        if (key && !uniqueSourcesMap.has(key)) {
+            uniqueSourcesMap.set(key, {
+                title: meta.title,
+                url: meta.url,
+                date: meta.date,
+                type: meta.type
+            });
+        }
+    });
+    const sources = Array.from(uniqueSourcesMap.values());
+
+    // 3. Web Search (Optional)
+    let webContext = "";
+    let webSources = [];
+    
+    if (useWebSearch) {
+        const webResult = await fetchWebInfo(query);
+        webContext = `
+[CONTEXT 2: Web Search (For Cross-Check)]
+* Use this for "## 🌐 최신 AI 검색 크로스체크".
+* **OBJECTIVE:** Validate info and find latest prices.
+${webResult.text}
+`;
+        webSources = webResult.sources;
+    }
+
+    // 4. Construct Prompt
     const finalPrompt = `
 ${systemInstruction}
+
+[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
+1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
+2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' list at the bottom of your response.** 
+   (The UI handles this separately).
+3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
 
 [SYSTEM NOTICE]
 You are operating in "FULL CONTEXT MODE". 
 You have been provided with the ENTIRE database of Cheolsan Land below.
 Your job is to read EVERYTHING and answer the user's question accurately.
-Do NOT use HTML tags. Use Markdown.
 
-[FULL DATABASE CONTEXT]
+[CONTEXT 1: Full Database (The Truth)]
 ${contextText}
+
+${webContext}
 
 [USER QUESTION]
 ${query}
+
+[Format Guide]
+1. Start with "## 🏰 철산랜드 데이터베이스".
+2. If Context 2 (Web Search) exists, add "## 🌐 최신 AI 검색 크로스체크" section.
+3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
 `;
 
-    // 4. Call Gemini
+    // 5. Call Gemini
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: finalPrompt,
     });
 
-    // 5. Send back response
+    // 6. Send back response
     res.json({ 
       answer: response.text, 
-      docCount: docCount
+      docCount: docCount,
+      sources: sources,
+      webSources: webSources
     });
 
   } catch (error) {
