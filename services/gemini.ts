@@ -76,12 +76,13 @@ export class GeminiService {
     let vectorDocs: any[] = [];
     let keywordDocs: any[] = [];
     
-    // 1. [Wide Net Strategy] Vector Search (Fetch 100 to avoid missing context)
+    // 1. [Wide Net Strategy] Vector Search
+    // Fetch 100 docs to capture even loosely related items
     try {
         const queryEmbedding = await this.generateEmbedding(query);
         const { data: documents, error } = await supabase.rpc('match_documents', {
             query_embedding: queryEmbedding,
-            match_threshold: 0.0, // No threshold, get everything relevant
+            match_threshold: 0.0, 
             match_count: 100 
         });
         if (!error && documents) vectorDocs = documents;
@@ -89,23 +90,20 @@ export class GeminiService {
         console.error("Vector search failed", e);
     }
 
-    // 2. [Harpoon Strategy] Keyword Search with Frequency Analysis
+    // 2. [Harpoon Strategy] Hybrid Keyword Search
     try {
-        // Filter out short words and special chars
         const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
-        
-        // Use top 5 keywords for broader catch
         const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
 
         if (targetKeywords.length > 0) {
-            // Create ILIKE conditions for both title and content
+            // Find docs containing ANY of the keywords
             const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
             
             const { data: kDocs, error: kError } = await supabase
                 .from('documents')
                 .select('id, content, metadata') 
                 .or(conditions)
-                .limit(50); // Get up to 50 keyword matches
+                .limit(50); 
             
             if (!kError && kDocs) keywordDocs = kDocs;
         }
@@ -122,14 +120,13 @@ export class GeminiService {
 
     keywordDocs.forEach(doc => {
         if (!combinedDocsMap.has(doc.id)) {
-            // Give keywords a base score if they weren't in vector results
             combinedDocsMap.set(doc.id, { ...doc, origin: 'keyword', baseScore: 0.5 });
         }
     });
 
     let allDocs = Array.from(combinedDocsMap.values());
 
-    // 4. [Smart Reranking] Frequency & Recency Boosting
+    // 4. [Smart Reranking] Frequency & Recency & Title Boosting
     const keywords = query.replace(/[?.,!]/g, '').split(/\s+/).filter(w => w.length > 1);
     const now = new Date();
 
@@ -141,21 +138,19 @@ export class GeminiService {
         keywords.forEach(keyword => {
             const k = keyword.toLowerCase();
             
-            // A. Title Match (Critical Context) - Huge Boost
+            // A. Title Match - Critical Context
             if (title.includes(k)) {
                 bonusScore += 10.0; 
             }
 
-            // B. Frequency Analysis (Depth of Content)
-            // Count how many times the keyword appears in content
-            // Using split for simple counting
+            // B. Frequency Analysis
             const count = content.split(k).length - 1;
             if (count > 0) {
-                bonusScore += (count * 0.5); // +0.5 per mention
+                bonusScore += (count * 0.5); 
             }
         });
 
-        // C. Recency Scoring (Freshness Boost)
+        // C. Recency Scoring
         if (doc.metadata.date) {
             const docDate = new Date(doc.metadata.date);
             const diffTime = Math.abs(now.getTime() - docDate.getTime());
@@ -175,7 +170,6 @@ export class GeminiService {
     });
 
     // 5. [Smart Cutoff] Top 25
-    // Drop the tail (noise) to improve speed and focus
     allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
     const finalDocs = allDocs.slice(0, 25);
     
@@ -203,7 +197,7 @@ Content: ${doc.content}
     })))).map((s: any) => JSON.parse(s));
 
     // Web Search
-    let webResult: { text: string; sources: any[] } = { text: "User did not request web search. Skip the Cross-Check section.", sources: [] };
+    let webResult: { text: string; sources: any[] } = { text: "Web Search is Disabled by User.", sources: [] };
     if (useWebSearch) {
         webResult = await this.fetchWebInfo(query);
     }
@@ -221,13 +215,16 @@ ${systemInstruction}
 
 [CONTEXT 1: My Database (The Truth)]
 * Use this for "## 🏰 철산랜드 데이터베이스".
-* **Prioritize documents with high recurrence of user keywords.**
+* **This is the Primary Source.** Prioritize documents with high recurrence of user keywords.
 * **If the answer is found here, provide EXTREME DETAIL.**
 ${internalContext}
 
 [CONTEXT 2: Web Search (For Cross-Check)]
 * Use this for "## 🌐 최신 AI 검색 크로스체크".
 * Status: ${useWebSearch ? "Active" : "Disabled"}
+* **OBJECTIVE OF THIS SECTION:**
+  1. **Validate** if the info in 'My Database' is still correct (e.g., "Is this restaurant still open?").
+  2. **Find Prices** or details if 'My Database' is missing them or they are outdated.
 ${webResult.text}
 
 [User Question]
