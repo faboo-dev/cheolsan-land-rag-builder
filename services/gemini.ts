@@ -154,32 +154,42 @@ export class GeminiService {
     allDocs.sort((a: any, b: any) => b.finalScore - a.finalScore);
     const finalDocs = allDocs.slice(0, 25);
 
-    const internalContext = finalDocs.map((doc: any) => `
-[Title: ${doc.metadata.title}]
-[Date: ${doc.metadata.date}]
-[URL: ${doc.metadata.url}]
-${doc.content}
-    `).join('\n\n');
-
+    // Prepare unique sources with index for client-side citation
     const uniqueSources = Array.from(new Set(finalDocs.map((doc: any) => JSON.stringify({
       title: doc.metadata.title,
       url: doc.metadata.url,
       date: doc.metadata.date,
       type: doc.metadata.type
-    })))).map((s: any) => JSON.parse(s));
+    })))).map((s: any, idx) => ({ ...JSON.parse(s), index: idx + 1 }));
 
-    let webResult = { text: "Web Search Disabled", sources: [] };
+    // Create a map for the prompt
+    const sourceMap = new Map();
+    uniqueSources.forEach(s => sourceMap.set(s.url || s.title, s.index));
+
+    const internalContext = finalDocs.map((doc: any) => {
+        const idx = sourceMap.get(doc.metadata.url || doc.metadata.title) || '?';
+        return `
+[Source ID: ${idx}]
+[Title: ${doc.metadata.title}]
+[Date: ${doc.metadata.date}]
+[URL: ${doc.metadata.url}]
+${doc.content}
+    `}).join('\n\n');
+
+    let webResult: { text: string; sources: any[] } = { text: "Web Search Disabled", sources: [] };
     if (useWebSearch) webResult = await this.fetchWebInfo(query);
 
     const finalPrompt = `
 ${systemInstruction}
 
-[NEGATIVE CONSTRAINTS]
-1. NO HTML tags. Markdown only.
-2. NO Reference list at bottom.
-3. INLINE citations only.
+[STRICT OUTPUT RULES]
+1. **Citation Style**: Use inline citations [[1]], [[2]]. Do NOT use [Title](URL).
+   - Match the [Source ID: X] provided in the context.
+2. **No Duplication**: Do NOT repeat the database section content in the cross-check section.
+3. **Markdown Only**: NO HTML tags.
+4. **No Reference List**: Do NOT list references at the bottom.
 
-[CONTEXT 1: My Database]
+[CONTEXT 1: My Database (Primary Source)]
 ${internalContext}
 
 [CONTEXT 2: Web Search]
