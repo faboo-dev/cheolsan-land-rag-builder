@@ -3,11 +3,18 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Resolve directory for file operations
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Middleware
 app.use(cors());
@@ -75,68 +82,11 @@ async function fetchWebInfo(query) {
   }
 }
 
-// --- Routes ---
-
-app.get('/', (req, res) => {
-  const status = {
-    status: 'running',
-    supabase: !!supabase ? 'connected' : 'disconnected',
-    gemini: !!ai ? 'connected' : 'disconnected'
-  };
-  res.json(status);
-});
-
-// 🔥 Full Context Chat Endpoint
-app.post('/api/chat/full-context', async (req, res) => {
-  try {
-    // Safety Check
-    if (!supabase || !ai) {
-      console.error("Request failed: Server is not properly configured.");
-      return res.status(500).json({ 
-        error: 'Server configuration error. Check logs for missing API Keys.',
-        details: {
-            supabase: !!supabase,
-            gemini: !!ai
-        }
-      });
-    }
-
-    const { query, systemInstruction, useWebSearch } = req.body;
-
-    if (!query) {
-      return res.status(400).json({ error: 'Query is required' });
-    }
-
-    console.log(`[Full Context] Processing query: ${query.substring(0, 50)}...`);
-
-    // 1. Fetch ALL documents from Supabase
-    // Supabase JS limit bumped to 10000 to catch everything
-    const { data: documents, error } = await supabase
-      .from('documents')
-      .select('content, metadata')
-      .limit(10000);
-
-    if (error) throw error;
-
-    const docCount = documents ? documents.length : 0;
-    console.log(`[Full Context] Fetched ${docCount} documents.`);
-
-    if (docCount === 0) {
-        return res.json({ answer: "데이터베이스에 저장된 내용이 없습니다.", docCount: 0, sources: [], webSources: [] });
-    }
-
-    // 2. Prepare Context String & Extract Sources
-    const contextText = documents.map(doc => `
-[Title: ${doc.metadata.title}]
-[Date: ${doc.metadata.date}]
-[Content]: ${doc.content}
-`).join('\n\n');
-
-    // Extract unique sources for UI buttons
+// --- Helper: Prepare Sources ---
+function extractSources(documents) {
     const uniqueSourcesMap = new Map();
     documents.forEach(doc => {
         const meta = doc.metadata;
-        // Use URL as key for uniqueness, fallback to title
         const key = meta.url || meta.title; 
         if (key && !uniqueSourcesMap.has(key)) {
             uniqueSourcesMap.set(key, {
@@ -147,69 +97,206 @@ app.post('/api/chat/full-context', async (req, res) => {
             });
         }
     });
-    const sources = Array.from(uniqueSourcesMap.values());
+    return Array.from(uniqueSourcesMap.values());
+}
 
-    // 3. Web Search (Optional)
+// --- Routes ---
+
+app.get('/', (req, res) => {
+  res.json({ 
+      status: 'running', 
+      modes: ['full-context', 'file-api'] 
+  });
+});
+
+// 🔥 MODE 1: Full Context (Text Injection)
+app.post('/api/chat/full-context', async (req, res) => {
+  try {
+    if (!supabase || !ai) return res.status(500).json({ error: 'Server config error' });
+
+    const { query, systemInstruction, useWebSearch } = req.body;
+    console.log(`[Full Context] Query: ${query.substring(0, 30)}...`);
+
+    const { data: documents, error } = await supabase
+      .from('documents')
+      .select('content, metadata')
+      .limit(10000);
+
+    if (error) throw error;
+
+    const docCount = documents ? documents.length : 0;
+    
+    // Create Context String
+    const contextText = documents.map(doc => `
+[Title: ${doc.metadata.title}]
+[Date: ${doc.metadata.date}]
+[Content]: ${doc.content}
+`).join('\n\n');
+
+    // Web Search
     let webContext = "";
     let webSources = [];
-    
     if (useWebSearch) {
         const webResult = await fetchWebInfo(query);
-        webContext = `
-[CONTEXT 2: Web Search (For Cross-Check)]
-* Use this for "## 🌐 최신 AI 검색 크로스체크".
-* **OBJECTIVE:** Validate info and find latest prices.
-${webResult.text}
-`;
+        webContext = `[CONTEXT 2: Web Search]\n${webResult.text}`;
         webSources = webResult.sources;
     }
 
-    // 4. Construct Prompt
     const finalPrompt = `
 ${systemInstruction}
+[NEGATIVE CONSTRAINTS]
+1. NO HTML tags. Markdown only.
+2. NO Reference list at bottom.
+3. INLINE citations only.
 
-[NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
-1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
-2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' list at the bottom of your response.** 
-   (The UI handles this separately).
-3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences.
-
-[SYSTEM NOTICE]
-You are operating in "FULL CONTEXT MODE". 
-You have been provided with the ENTIRE database of Cheolsan Land below.
-Your job is to read EVERYTHING and answer the user's question accurately.
-
-[CONTEXT 1: Full Database (The Truth)]
+[CONTEXT 1: Full Database]
 ${contextText}
 
 ${webContext}
 
-[USER QUESTION]
+[QUESTION]
 ${query}
-
-[Format Guide]
-1. Start with "## 🏰 철산랜드 데이터베이스".
-2. If Context 2 (Web Search) exists, add "## 🌐 최신 AI 검색 크로스체크" section.
-3. Convert timestamps (02:30) to links: [Title @ 02:30](URL&t=150).
 `;
 
-    // 5. Call Gemini
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: finalPrompt,
     });
 
-    // 6. Send back response
     res.json({ 
       answer: response.text, 
       docCount: docCount,
-      sources: sources,
+      sources: extractSources(documents),
       webSources: webSources
     });
 
   } catch (error) {
-    console.error('[Server Request Error]', error);
-    res.status(500).json({ error: error.message || 'Internal Server Error' });
+    console.error('[Full Context Error]', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📁 MODE 2: File API (Upload -> Generate -> Delete)
+app.post('/api/chat/file-api', async (req, res) => {
+  let tempFilePath = null;
+  let uploadResult = null;
+
+  try {
+    if (!supabase || !ai) return res.status(500).json({ error: 'Server config error' });
+
+    const { query, systemInstruction, useWebSearch } = req.body;
+    console.log(`[File API] Query: ${query.substring(0, 30)}...`);
+
+    // 1. Fetch Data
+    const { data: documents, error } = await supabase
+      .from('documents')
+      .select('content, metadata')
+      .limit(10000);
+
+    if (error) throw error;
+    const docCount = documents.length;
+
+    // 2. Create File Content
+    const fileContent = documents.map(doc => `
+SOURCE_TITLE: ${doc.metadata.title}
+SOURCE_DATE: ${doc.metadata.date}
+SOURCE_URL: ${doc.metadata.url}
+CONTENT:
+${doc.content}
+--------------------------------------------------
+`).join('\n');
+
+    // 3. Save Temp File
+    const fileName = `cheolsan_kb_${Date.now()}.txt`;
+    tempFilePath = path.join(__dirname, fileName);
+    fs.writeFileSync(tempFilePath, fileContent);
+    console.log(`[File API] Created temp file: ${fileName}`);
+
+    // 4. Upload to Google
+    console.log("[File API] Uploading to Google...");
+    uploadResult = await ai.files.upload({
+        file: tempFilePath,
+        config: { mimeType: 'text/plain', displayName: 'Cheolsan DB' }
+    });
+    
+    // Wait for processing
+    let fileState = uploadResult.file.state;
+    while (fileState === 'PROCESSING') {
+        await new Promise(r => setTimeout(r, 1000));
+        const check = await ai.files.get({ name: uploadResult.file.name });
+        fileState = check.file.state;
+    }
+    if (fileState === 'FAILED') throw new Error("File upload failed processing");
+    console.log(`[File API] Upload Ready: ${uploadResult.file.uri}`);
+
+    // 5. Generate with File
+    let webContextText = "";
+    let webSources = [];
+    let tools = [];
+
+    if (useWebSearch) {
+        // We can't easily mix File + Tools in one turn perfectly in all models, 
+        // but for Gemini 1.5/2.5 it usually works. 
+        // However, standard tools might conflict with file context in some SDK versions.
+        // We will do a separate search call for simplicity and inject text if needed, 
+        // OR try using tools config. Let's use tools config.
+        tools = [{ googleSearch: {} }];
+    }
+
+    const contents = [
+        {
+            role: 'user',
+            parts: [
+                { fileData: { fileUri: uploadResult.file.uri, mimeType: uploadResult.file.mimeType } },
+                { text: `
+${systemInstruction}
+
+[STRICT RULES]
+1. Use the uploaded file as your SOURCE OF TRUTH for "## 🏰 철산랜드 데이터베이스".
+2. Create links using 'SOURCE_URL'.
+3. Convert timestamps to links.
+4. NO HTML. Markdown only.
+5. NO Reference list at bottom.
+
+${useWebSearch ? 'Also perform a Google Search for "## 🌐 최신 AI 검색 크로스체크" to validate info and prices.' : ''}
+
+[QUESTION]
+${query}
+                ` }
+            ]
+        }
+    ];
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: contents,
+        config: useWebSearch ? { tools } : undefined
+    });
+
+    // 6. Cleanup Remote File (Async)
+    (async () => {
+        try {
+            await ai.files.delete({ name: uploadResult.file.name });
+            console.log("[File API] Remote file deleted.");
+        } catch (e) { console.error("Cleanup error", e); }
+    })();
+
+    res.json({
+        answer: response.text,
+        docCount: docCount,
+        sources: extractSources(documents),
+        webSources: [] // Web sources come embedded when using tools
+    });
+
+  } catch (error) {
+    console.error('[File API Error]', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    // Cleanup Local File
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+        console.log("[File API] Local file deleted.");
+    }
   }
 });
 
