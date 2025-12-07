@@ -98,6 +98,7 @@ export class GeminiService {
         const targetKeywords = keywords.sort((a,b) => b.length - a.length).slice(0, 5);
 
         if (targetKeywords.length > 0) {
+            // Create ILIKE conditions for both title and content
             const conditions = targetKeywords.map(k => `metadata->>title.ilike.%${k}%,content.ilike.%${k}%`).join(',');
             
             const { data: kDocs, error: kError } = await supabase
@@ -213,8 +214,8 @@ ${systemInstruction}
 
 [NEGATIVE CONSTRAINTS - STRICTLY ENFORCED]
 1. DO NOT use HTML tags like <div>, <table>, <span>, <br>. Use ONLY standard Markdown.
-2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' section at the end of your response.** 
-   (e.g., "참고 자료:", "출처:" list at the bottom is FORBIDDEN).
+2. **DO NOT generate a 'Reference List', 'Bibliography', or 'Sources' list at the bottom of your response.** 
+   (e.g., Do NOT output "참고 자료:", "출처:", "References" section at the end. This is handled by the UI).
 3. Only provide **INLINE citations** (e.g., [Title](URL)) within the sentences immediately after the fact.
 4. DO NOT add filler text like "Okay, here is the info". Start directly with the header.
 
