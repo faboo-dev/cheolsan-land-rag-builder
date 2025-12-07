@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import IngestionPanel from './components/IngestionPanel';
 import KnowledgeList from './components/KnowledgeList';
@@ -45,35 +44,11 @@ const App: React.FC = () => {
     if (savedInstruction) {
       setSystemInstruction(savedInstruction);
     } else {
-      // User's Custom Hardcoded Prompt (Updated with Specific Headers & Footer constraint)
-      setSystemInstruction(`[답변 형태나 태도]
-너는 철산랜드의 AI 가이드야. 철산랜드는 여행유튜버이자 블로거로 주로 아이들과 여행을 다니는 중년의 아빠야. 완전 개그감이 넘치니까 답변은 항상 '형님', '누님'하면서 엄청 유쾌하게 답변을 달아줘.
-
-[답변 형태]
-1. 반드시 '## 🏰 철산랜드 데이터베이스' 라는 제목으로 답변을 시작해.
-이 섹션은 내가 올린 데이터베이스의 내용만을 참고해서 답변해줘. 데이터베이스에 없는 내용이나 추측은 절대하지마. 할루시네이션은 금지야. 이 답변은 위에 말한 [답변 형태나 태도]를 참고해서 완전 개그감 쩔게 대답해줘. 그리고 내용을 최대한 자세하고 친절하게 알려줘. 이게 거의 핵심이야. 
-이 챕터에서 내가 답변하는 것처럼 최대한 자세하게 답변을 해줘야하는게 목표야. 
-중요한 포인트! 나의 데이터베이스에 없는 내용에 대한 질문이라면 나의 데이터베이스에는 관련내용이 없다. AI검색으로 답변을 해주겠다는 식으로 명확한 공지가 있어야해
-
-2. 반드시 '## 🌐 최신 AI 검색 크로스체크' 라는 제목으로 두 번째 내용을 작성해. 
-(단, 사용자가 웹 검색을 요청하지 않았거나 Web Context가 제공되지 않았다면 이 섹션은 생략해)
-여기서는 완전 답변 태도나 톤앤매너가 달라져야해. 
-앞부분의 답변과 이 부분의 답변 스타일은 완전 다르게해서. 앞부분은 내가 말하는것처럼 뒷부분은 AI가 추가적인 정보를 주는것으로 포지셔닝되야해. 
-크로스체크의 기준은 가장 중요한게 지금의 가격이야. 왜냐면 나의 데이터베이스는 오래된 정보도 있기 때문에 가격이 변경되었을수도 있어. 
-그리고 다른 내용들도 나의 데이터베이스와 다른 내용이 있다면 언급을 꼭 해줘야해. 
-여기는 기존 [철산랜드]의 정보를 확인하고 부족한점이 있다거나 검색해보니 다른 점이 있다면 그런 펙트를 알려주면돼.  
-내용적으로도 다른게 있다면 표기를 해줘. 표형태로 해줘도 좋아.
-
-3. 각 섹션 구분을 확실히 해줘. 
-완전히 사람이 내가 답변하는 듯한 나의 데이터베이스에 기반한 답변이 우선이야. 양도 질도 제일 많아야해. 
-
-가장 중요한 출처는 링크로 꼭 표기를 해줘야해. 
-**중요: 전체 답변 하단에 출처 목록을 따로 만들지 마. 본문 안에 링크로만 넣어줘.**
-
-그리고 첫번째 섹션은 반드시 모든 정보의 출처를 링크로 표기해줘.
-유튜브는 타임스탬프 달아서 해당 영상을 링크를 걸어주고 해당시간으로 이동되게 해줘. 
-블로그는 URL을 링크로 걸어주면 돼.
-4. 그리고 무슨 답변이든 추측은 안돼. 할루시네이션은 절대 하면 안됨!! 절대 금지!!`);
+      setSystemInstruction(`너는 철산랜드의 AI 가이드야.
+1. [내 데이터베이스]의 내용을 바탕으로 아주 상세하게 답변해줘. 내용을 요약하지 말고, 블로그 글을 읽어주듯이 풍부하게 설명해.
+2. [내 데이터]와 [최신 웹 정보]를 비교할 때, 가격이나 정보가 다르면 '날짜'를 기준으로 최신 정보를 추천해.
+3. 유튜브 자막에 시간(예: 02:30)이 있으면 반드시 링크에 타임스탬프를 걸어줘.
+4. 말투는 친근하고 전문적인 블로거 톤으로 해줘.`);
     }
     
     // Initial Load of Sources from Supabase
@@ -83,6 +58,7 @@ const App: React.FC = () => {
   // Function to fetch unique sources from Supabase
   const fetchSources = async () => {
     // Since Supabase documents table stores chunks, we fetch all metadata to group them.
+    // For a prototype, fetching all metadata is fine. For production, we'd use a separate Sources table.
     const { data, error } = await supabase
         .from('documents')
         .select('metadata')
@@ -116,6 +92,7 @@ const App: React.FC = () => {
 
   const handleDeleteSource = async (id: string) => {
     if (window.confirm("정말 이 데이터를 삭제하시겠습니까? (수파베이스에서 영구 삭제)")) {
+      // Delete based on metadata->>sourceId
       const { error } = await supabase
         .from('documents')
         .delete()
@@ -156,7 +133,7 @@ const App: React.FC = () => {
       <div className="h-screen w-full bg-white">
         <RAGChat 
           geminiService={geminiService} 
-          sources={sources}
+          sources={sources} // Not used for retrieval anymore, but kept for interface
           systemInstruction={systemInstruction}
           isEmbed={true}
         />
@@ -269,7 +246,7 @@ const App: React.FC = () => {
                     🧠 AI 페르소나/지침 설정 (Prompt Engineering)
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">
-                    아래 설정된 <strong>프롬프트</strong>에 따라 AI가 답변합니다. 수정 후 저장하면 즉시 반영됩니다.
+                    AI 답변의 <strong>순서, 형태(표/리스트), 말투</strong>를 여기서 자유롭게 정의하세요.
                   </p>
                 </div>
                 <button
@@ -283,8 +260,8 @@ const App: React.FC = () => {
                 value={systemInstruction}
                 onChange={(e) => setSystemInstruction(e.target.value)}
                 className="w-full p-4 border rounded-md shadow-sm focus:ring-2 focus:ring-primary focus:border-primary text-gray-800 leading-relaxed font-mono text-sm"
-                rows={20}
-                placeholder="AI 지침을 입력하세요..."
+                rows={6}
+                placeholder="예: 1. 내 데이터 내용을 먼저 요약해줘. 2. 그다음 최신 웹 검색 결과와 비교해줘. 3. 답변은 친절한 반말로 해줘."
               />
             </div>
 

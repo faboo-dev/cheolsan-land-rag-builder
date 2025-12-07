@@ -40,10 +40,7 @@ const IngestionPanel: React.FC<Props> = ({ onAddSource, geminiService }) => {
       
       for (let i = 0; i < chunks.length; i++) {
         try {
-            // [Contextual Embedding] Include Title and Date in the text to embed
-            // This ensures the vector contains the context of "What is this article about?"
-            const contextText = `Title: ${title}\nDate: ${date}\nContent: ${chunks[i].text}`;
-            const vector = await geminiService.generateEmbedding(contextText);
+            const vector = await geminiService.generateEmbedding(chunks[i].text);
             
             // Prepare row for Supabase
             rowsToInsert.push({
