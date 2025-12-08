@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -157,10 +158,15 @@ app.post('/api/chat/full-context', async (req, res) => {
     const finalPrompt = `
 ${systemInstruction}
 
+[VISUAL & FORMAT RULES]
+1. **Use Emojis**: Add emojis to section headers (e.g., ## 🏰 Database).
+2. **Highlighting**: Use **bold** for key terms and prices.
+3. **Links**: Use blue links for inline citations [[1]].
+4. **Structure**: Use bullet points and tables for readability.
+
 [STRICT OUTPUT RULES]
 1. **Citation Style**: Use inline citations like [[1]], [[2]]. Do NOT use [Title](URL).
    - Match the [Source ID: X] provided in the context.
-   - Example: "This place is great [[1]]."
 2. **No Duplication**: Do NOT repeat the content from "Iron Land Database" in the "Cross Check" section.
 3. **Markdown Only**: NO HTML tags allowed. Use Markdown tables if needed.
 4. **No Reference List**: Do NOT list references at the bottom. The frontend handles that.
@@ -253,8 +259,6 @@ ${doc.content}
     console.log(`[File API] Upload Ready: ${uploadResult.file.uri}`);
 
     // 5. Pre-fetch Web Search (Injection Method)
-    // Mixing File API + Tools sometimes causes the model to ignore one context.
-    // Injecting the search result as TEXT into the prompt is more reliable for Cross-Checking.
     let webContextText = "";
     let webSources = [];
 
@@ -275,6 +279,12 @@ ${webResult.text}
                 { fileData: { fileUri: uploadResult.file.uri, mimeType: uploadResult.file.mimeType } },
                 { text: `
 ${systemInstruction}
+
+[VISUAL & FORMAT RULES]
+1. **Use Emojis**: Add emojis to section headers (e.g., ## 🏰 Database).
+2. **Highlighting**: Use **bold** for key terms and prices.
+3. **Links**: Use blue links for inline citations [[1]].
+4. **Structure**: Use bullet points and tables for readability.
 
 [STRICT OUTPUT RULES]
 1. **Citation Style**: Use the "SOURCE_INDEX" provided in the file. Format: [[1]], [[2]]. 
