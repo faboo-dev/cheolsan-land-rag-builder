@@ -79,10 +79,6 @@ export class GeminiService {
     }
 
     // CLIENT RAG MODE (Fallback/Standard)
-    // ... (Standard RAG Logic simplified for brevity, assume strictly kept from previous robust version)
-    // For XML output length, I am ensuring the RAG part remains as previously optimized.
-    
-    // [Client-Side Logic Re-inserted for Completeness]
     let vectorDocs: any[] = [];
     let keywordDocs: any[] = [];
     
@@ -116,12 +112,21 @@ export class GeminiService {
         return { ...d, score };
     }).sort((a,b) => b.score - a.score).slice(0, 25);
 
+    // FIX: Provide default values to prevent undefined types
     const sources = Array.from(new Set(docs.map((d: any) => JSON.stringify({ 
-        title: d.metadata.title, url: d.metadata.url, date: d.metadata.date, type: d.metadata.type 
+        title: d.metadata.title || "Untitled", 
+        url: d.metadata.url || "#", 
+        date: d.metadata.date || "", 
+        type: d.metadata.type || "BLOG"
     })))).map((s: any, i) => ({ ...JSON.parse(s), index: i + 1 }));
 
-    const sourceMap = new Map(sources.map(s => [s.url||s.title, s.index]));
-    const context = docs.map((d: any) => `[Source ID: ${sourceMap.get(d.metadata.url||d.metadata.title)}]\n${d.content}`).join('\n\n');
+    const sourceMap = new Map(sources.map((s: any) => [s.url||s.title, s.index]));
+    
+    const context = docs.map((d: any) => {
+        const key = d.metadata.url || d.metadata.title || "unknown";
+        const idx = sourceMap.get(key) || "?";
+        return `[Source ID: ${idx}]\n${d.content}`;
+    }).join('\n\n');
 
     let webResult: { text: string; sources: any[] } = { text: "", sources: [] };
     if (useWebSearch) webResult = await this.fetchWebInfo(query);
