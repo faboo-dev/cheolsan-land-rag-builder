@@ -42,7 +42,8 @@ export class GeminiService {
         config: { tools: [{ googleSearch: {} }] },
       });
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const sources = chunks.map((c: any) => c.web ? { title: c.web.title, url: c.web.uri } : null).filter(Boolean);
+      // Fix TS error: ensure title and url are strings
+      const sources = chunks.map((c: any) => c.web ? { title: c.web.title || "Web Result", url: c.web.uri || "#" } : null).filter(Boolean);
       return { text: response.text || "", sources };
     } catch (e) {
       return { text: "", sources: [] };
@@ -108,26 +109,27 @@ export class GeminiService {
     const qLower = query.toLowerCase();
     docs = docs.map((d: any) => {
         let score = d.baseScore;
-        if (d.metadata.title?.toLowerCase().includes(qLower)) score += 10;
+        if (d.metadata?.title?.toLowerCase().includes(qLower)) score += 10;
         return { ...d, score };
     }).sort((a,b) => b.score - a.score).slice(0, 25);
 
-    // FIX: Provide default values to prevent undefined types
+    // Fix TS error: Provide strict default values for all fields
     const sources = Array.from(new Set(docs.map((d: any) => JSON.stringify({ 
-        title: d.metadata.title || "Untitled", 
-        url: d.metadata.url || "#", 
-        date: d.metadata.date || "", 
-        type: d.metadata.type || "BLOG"
+        title: d.metadata?.title || "Untitled", 
+        url: d.metadata?.url || "#", 
+        date: d.metadata?.date || "", 
+        type: d.metadata?.type || "BLOG"
     })))).map((s: any, i) => ({ ...JSON.parse(s), index: i + 1 }));
 
     const sourceMap = new Map(sources.map((s: any) => [s.url||s.title, s.index]));
     
     const context = docs.map((d: any) => {
-        const key = d.metadata.url || d.metadata.title || "unknown";
+        const key = d.metadata?.url || d.metadata?.title || "unknown";
         const idx = sourceMap.get(key) || "?";
         return `[Source ID: ${idx}]\n${d.content}`;
     }).join('\n\n');
 
+    // Fix TS error: Explicit type definition
     let webResult: { text: string; sources: any[] } = { text: "", sources: [] };
     if (useWebSearch) webResult = await this.fetchWebInfo(query);
 
@@ -150,7 +152,7 @@ ${query}
         answer: response.text,
         sources,
         webSources: webResult.sources,
-        debugSnippets: docs.map((d: any) => ({ score: d.score, text: d.content, sourceTitle: d.metadata.title }))
+        debugSnippets: docs.map((d: any) => ({ score: d.score, text: d.content, sourceTitle: d.metadata?.title || "Unknown" }))
     };
   }
 }
