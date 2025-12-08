@@ -280,7 +280,7 @@ ${systemInstruction}
 1. **Citation Style**: Use the "SOURCE_INDEX" provided in the file. Format: [[1]], [[2]]. 
    - Do NOT use [Title](URL).
    - Example: "According to the guide [[1]], the price is..."
-2. **No Duplication**: Do NOT repeat the same information in the "Cross Check" section if it matches the database. Only mention differences or new info.
+2. **No Duplication**: Do NOT repeat the database content in the Cross-Check section. If there is no new info from web search, just say "No additional info found."
 3. **Markdown Only**: NO HTML tags.
 4. **No Reference List**: Do NOT list references at the bottom.
 
