@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -46,7 +45,7 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
 
   const getUrl = (idxStr: string, sources?: any[]) => {
       const idx = parseInt(idxStr);
-      const src = sources?.find((s: any) => s.index === idx) || sources?.[idx - 1];
+      const src = sources?.find((s: any) => s.index === idx);
       return src?.url || null;
   };
 
@@ -71,23 +70,25 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
                                 h1: ({node, ...props}) => <h1 className="text-xl font-bold text-teal-700 mt-4 mb-2 border-b pb-1" {...props} />,
                                 h2: ({node, ...props}) => <h2 className="text-lg font-bold text-teal-600 mt-4 mb-2 bg-teal-50 p-1 rounded" {...props} />,
                                 h3: ({node, ...props}) => <h3 className="text-base font-bold text-gray-700 mt-2" {...props} />,
+                                strong: ({node, ...props}) => <strong className="font-bold text-gray-900 bg-yellow-100 px-1 rounded" {...props} />,
                                 a: ({node, href, children, ...props}) => {
                                     const text = String(children);
+                                    // Check for citation like [[1]] or [1]
                                     const match = text.match(/^\[?\[(\d+)\]\]?$/);
                                     if (match) {
                                         const url = getUrl(match[1], msg.sources);
-                                        if (!url) return <span className="text-gray-400 text-xs">[{match[1]}]</span>;
+                                        // Render clickable badge
                                         return (
                                             <button 
-                                                onClick={() => window.open(url, '_blank')}
-                                                className="inline-flex items-center justify-center mx-1 w-5 h-5 text-[10px] font-bold text-white bg-blue-500 rounded-full hover:bg-blue-600 shadow-sm align-top cursor-pointer"
-                                                title="출처로 이동"
+                                                onClick={() => url ? window.open(url, '_blank') : alert('URL 정보를 찾을 수 없습니다.')}
+                                                className="inline-flex items-center justify-center mx-1 px-1.5 h-5 text-[10px] font-bold text-white bg-blue-500 rounded hover:bg-blue-600 shadow-sm align-top cursor-pointer transition-transform hover:scale-105"
+                                                title={url || "링크 없음"}
                                             >
                                                 {match[1]}
                                             </button>
                                         );
                                     }
-                                    return <a href={href} className="text-blue-600 font-medium hover:underline break-all" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+                                    return <a href={href} className="text-blue-600 font-medium hover:underline hover:text-blue-800 break-all" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
                                 },
                                 table: ({node, ...props}) => <div className="overflow-x-auto my-2 border rounded"><table className="min-w-full divide-y divide-gray-200" {...props} /></div>,
                                 th: ({node, ...props}) => <th className="px-3 py-2 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase" {...props} />,
@@ -95,14 +96,27 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
                             }}
                         >{msg.text || ''}</ReactMarkdown>
                         
+                        {/* Footer Sources List */}
                         {msg.sources && msg.sources.length > 0 && (
                             <div className="mt-4 pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 {msg.sources.map((s: any, idx: number) => (
-                                    <a key={idx} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-center p-2 bg-gray-50 border rounded hover:bg-blue-50 transition text-xs">
-                                        <span className="w-5 h-5 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold mr-2 text-[10px]">{s.index}</span>
-                                        <span className="truncate flex-1 text-gray-700">{s.title}</span>
+                                    <a key={idx} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-center p-2 bg-gray-50 border rounded hover:bg-blue-50 transition text-xs group">
+                                        <span className="w-5 h-5 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold mr-2 text-[10px] group-hover:bg-blue-600">{s.index}</span>
+                                        <span className="truncate flex-1 text-gray-700 font-medium">{s.title}</span>
                                     </a>
                                 ))}
+                            </div>
+                        )}
+                        {msg.webSources && msg.webSources.length > 0 && (
+                            <div className="mt-2 pt-2 border-t text-xs text-gray-500">
+                                <p className="font-bold mb-1">🌐 웹 검색 출처:</p>
+                                <ul className="list-disc pl-4 space-y-1">
+                                    {msg.webSources.map((s, idx) => (
+                                        <li key={idx}>
+                                            <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">{s.title}</a>
+                                        </li>
+                                    ))}
+                                </ul>
                             </div>
                         )}
                     </div>
@@ -125,9 +139,9 @@ const RAGChat: React.FC<Props> = ({ geminiService, systemInstruction, isEmbed = 
                 <option value="full-text">🔥 통암기 (정확)</option>
                 <option value="file-api">📁 구글 파일 API (실험)</option>
             </select>
-            <label className="flex items-center cursor-pointer select-none">
+            <label className="flex items-center cursor-pointer select-none ml-2">
                 <input type="checkbox" checked={useWebSearch} onChange={e => setUseWebSearch(e.target.checked)} className="mr-1" />
-                <span className="text-gray-600">🌐 웹 검색 크로스체크</span>
+                <span className="text-gray-600">🌐 최신 정보 크로스체크 (가격/변동사항)</span>
             </label>
         </div>
         <form onSubmit={handleSend} className="flex gap-2">
