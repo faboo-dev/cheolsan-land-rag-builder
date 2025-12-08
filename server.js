@@ -13,15 +13,15 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Resolve directory for file operations
+// Resolve directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Middleware
-app.use(cors());
+// Middleware - Allow ALL origins to prevent connection errors
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// --- Configuration Check & Initialization ---
+// --- Config ---
 console.log("Starting Cheolsan Land Server...");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -31,310 +31,171 @@ const API_KEY = process.env.API_KEY;
 let supabase = null;
 let ai = null;
 
-// 1. Check Supabase
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error("❌ CRITICAL: Supabase URL or Key is MISSING in environment variables.");
-} else {
-  try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    console.log("✅ Supabase Client Initialized.");
-  } catch (err) {
-    console.error("❌ Failed to initialize Supabase:", err.message);
-  }
-}
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) console.error("❌ MISSING: Supabase Config");
+else supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// 2. Check Gemini
-if (!API_KEY) {
-  console.error("❌ CRITICAL: Google API_KEY is MISSING in environment variables.");
-} else {
-  try {
-    ai = new GoogleGenAI({ apiKey: API_KEY });
-    console.log("✅ Gemini Client Initialized.");
-  } catch (err) {
-    console.error("❌ Failed to initialize Gemini:", err.message);
-  }
-}
+if (!API_KEY) console.error("❌ MISSING: Google API Key");
+else ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// --- Helper: Web Search ---
+// --- Helpers ---
 async function fetchWebInfo(query) {
   if (!ai) return { text: "", sources: [] };
   try {
-    console.log(`[Server] Performing Web Search for: ${query}`);
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Search the web for the latest information regarding: "${query}". Focus on prices, operating hours, and recent reviews.`,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
+      contents: `Search web for: "${query}". Focus on prices, hours, reviews.`,
+      config: { tools: [{ googleSearch: {} }] },
     });
-
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    const webSources = groundingChunks
-      .map((chunk) => chunk.web ? { title: chunk.web.title, url: chunk.web.uri } : null)
-      .filter((item) => item !== null);
-
-    return {
-      text: response.text || "웹 검색 결과를 가져올 수 없습니다.",
-      sources: webSources
-    };
+    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const webSources = chunks.map(c => c.web ? { title: c.web.title, url: c.web.uri } : null).filter(Boolean);
+    return { text: response.text || "No web results.", sources: webSources };
   } catch (e) {
-    console.error("[Server] Web Search Error", e);
-    return { text: "(웹 검색 실패 - 데이터베이스 정보로만 답변합니다)", sources: [] };
+    console.error("Web Search Error", e);
+    return { text: "(Web search failed)", sources: [] };
   }
 }
 
-// --- Helper: Prepare Sources ---
 function extractSources(documents) {
-    const uniqueSourcesMap = new Map();
+    const uniqueMap = new Map();
     documents.forEach(doc => {
         const meta = doc.metadata;
         const key = meta.url || meta.title; 
-        if (key && !uniqueSourcesMap.has(key)) {
-            uniqueSourcesMap.set(key, {
-                title: meta.title,
-                url: meta.url,
-                date: meta.date,
-                type: meta.type
-            });
+        if (key && !uniqueMap.has(key)) {
+            uniqueMap.set(key, { ...meta });
         }
     });
-    // Convert to array and assign an index (1-based)
-    return Array.from(uniqueSourcesMap.values()).map((source, index) => ({
-        ...source,
-        index: index + 1
-    }));
+    return Array.from(uniqueMap.values()).map((s, i) => ({ ...s, index: i + 1 }));
 }
 
 // --- Routes ---
+app.get('/', (req, res) => res.json({ status: 'running', mode: 'Unified Server' }));
 
-app.get('/', (req, res) => {
-  res.json({ 
-      status: 'running', 
-      modes: ['full-context', 'file-api'] 
-  });
-});
-
-// 🔥 MODE 1: Full Context (Text Injection)
+// 🔥 MODE 1: Full Context
 app.post('/api/chat/full-context', async (req, res) => {
   try {
     if (!supabase || !ai) return res.status(500).json({ error: 'Server config error' });
-
     const { query, systemInstruction, useWebSearch } = req.body;
-    console.log(`[Full Context] Query: ${query.substring(0, 30)}...`);
 
-    const { data: documents, error } = await supabase
-      .from('documents')
-      .select('content, metadata')
-      .limit(10000);
+    const { data: documents } = await supabase.from('documents').select('content, metadata').limit(10000);
+    if (!documents) throw new Error("No documents found");
 
-    if (error) throw error;
-
-    const docCount = documents ? documents.length : 0;
-    
-    // Prepare Sources with Indices
     const sources = extractSources(documents);
     const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
 
-    // Create Context String
     const contextText = documents.map(doc => {
         const idx = sourceMap.get(doc.metadata.url || doc.metadata.title) || '?';
-        return `
-[Source ID: ${idx}]
-[Title: ${doc.metadata.title}]
-[Date: ${doc.metadata.date}]
-[Content]: ${doc.content}
-`;
+        return `[Source ID: ${idx}]\n[Title: ${doc.metadata.title}]\n${doc.content}`;
     }).join('\n\n');
 
-    // Web Search
     let webContext = "";
     let webSources = [];
     if (useWebSearch) {
-        const webResult = await fetchWebInfo(query);
-        webContext = `[CONTEXT 2: Web Search Results (For Cross-Check)]\n${webResult.text}`;
-        webSources = webResult.sources;
+        const webRes = await fetchWebInfo(query);
+        webContext = `\n[## 🌐 Web Search Results]\n${webRes.text}`;
+        webSources = webRes.sources;
     }
 
     const finalPrompt = `
 ${systemInstruction}
 
 [VISUAL & FORMAT RULES]
-1. **Use Emojis**: Add emojis to section headers (e.g., ## 🏰 Database).
-2. **Highlighting**: Use **bold** for key terms and prices.
-3. **Links**: Use blue links for inline citations [[1]].
-4. **Structure**: Use bullet points and tables for readability.
+1. **Emojis**: Use emojis in ALL headers (e.g., ## 🏰 Database).
+2. **Links**: Use blue links.
+3. **Citations**: Use [[1]] format.
 
-[STRICT OUTPUT RULES]
-1. **Citation Style**: Use inline citations like [[1]], [[2]]. Do NOT use [Title](URL).
-   - Match the [Source ID: X] provided in the context.
-2. **No Duplication**: Do NOT repeat the content from "Iron Land Database" in the "Cross Check" section.
-3. **Markdown Only**: NO HTML tags allowed. Use Markdown tables if needed.
-4. **No Reference List**: Do NOT list references at the bottom. The frontend handles that.
-
-[CONTEXT 1: My Database (Primary Source)]
+[CONTEXT]
 ${contextText}
-
-${useWebSearch ? webContext : ""}
+${webContext}
 
 [QUESTION]
 ${query}
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: finalPrompt,
-    });
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: finalPrompt });
+    res.json({ answer: response.text, sources, webSources });
 
-    res.json({ 
-      answer: response.text, 
-      docCount: docCount,
-      sources: sources,
-      webSources: webSources
-    });
-
-  } catch (error) {
-    console.error('[Full Context Error]', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 📁 MODE 2: File API (Upload -> Generate -> Delete)
+// 📁 MODE 2: File API
 app.post('/api/chat/file-api', async (req, res) => {
   let tempFilePath = null;
   let uploadResult = null;
-
   try {
     if (!supabase || !ai) return res.status(500).json({ error: 'Server config error' });
-
     const { query, systemInstruction, useWebSearch } = req.body;
-    console.log(`[File API] Query: ${query.substring(0, 30)}...`);
 
-    // 1. Fetch Data
-    const { data: documents, error } = await supabase
-      .from('documents')
-      .select('content, metadata')
-      .limit(10000);
-
-    if (error) throw error;
-    const docCount = documents.length;
-
-    // Prepare Sources for frontend
+    const { data: documents } = await supabase.from('documents').select('content, metadata').limit(10000);
     const sources = extractSources(documents);
-    // Create a map to inject indices into the file content for easier citation
     const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
 
-    // 2. Create File Content
-    // We inject "SOURCE_INDEX: X" so Gemini knows which number to cite.
     const fileContent = documents.map(doc => `
 SOURCE_INDEX: [[${sourceMap.get(doc.metadata.url || doc.metadata.title) || '?'}]]
 SOURCE_TITLE: ${doc.metadata.title}
-SOURCE_DATE: ${doc.metadata.date}
 SOURCE_URL: ${doc.metadata.url}
 CONTENT:
 ${doc.content}
 --------------------------------------------------
 `).join('\n');
 
-    // 3. Save Temp File
-    const fileName = `cheolsan_kb_${Date.now()}.txt`;
+    const fileName = `kb_${Date.now()}.txt`;
     tempFilePath = path.join(__dirname, fileName);
     fs.writeFileSync(tempFilePath, fileContent);
-    console.log(`[File API] Created temp file: ${fileName}`);
 
-    // 4. Upload to Google
-    console.log("[File API] Uploading to Google...");
-    uploadResult = await ai.files.upload({
-        file: tempFilePath,
-        config: { mimeType: 'text/plain', displayName: 'Cheolsan DB' }
-    });
+    uploadResult = await ai.files.upload({ file: tempFilePath, config: { mimeType: 'text/plain' } });
     
-    // Wait for processing
-    let fileState = uploadResult.file.state;
-    while (fileState === 'PROCESSING') {
+    // Wait for active
+    let state = uploadResult.file.state;
+    while (state === 'PROCESSING') {
         await new Promise(r => setTimeout(r, 1000));
         const check = await ai.files.get({ name: uploadResult.file.name });
-        fileState = check.file.state;
+        state = check.file.state;
     }
-    if (fileState === 'FAILED') throw new Error("File upload failed processing");
-    console.log(`[File API] Upload Ready: ${uploadResult.file.uri}`);
 
-    // 5. Pre-fetch Web Search (Injection Method)
-    let webContextText = "";
+    let webContext = "";
     let webSources = [];
-
     if (useWebSearch) {
-        const webResult = await fetchWebInfo(query);
-        webContextText = `
-[CONTEXT 2: Web Search Results (For Cross-Check)]
-${webResult.text}
-        `;
-        webSources = webResult.sources;
+        const webRes = await fetchWebInfo(query);
+        webContext = `\n[CONTEXT 2: Web Search Results]\n${webRes.text}`;
+        webSources = webRes.sources;
     }
 
-    // 6. Generate with File + Web Context
-    const contents = [
-        {
-            role: 'user',
-            parts: [
-                { fileData: { fileUri: uploadResult.file.uri, mimeType: uploadResult.file.mimeType } },
-                { text: `
+    const contents = [{
+        role: 'user',
+        parts: [
+            { fileData: { fileUri: uploadResult.file.uri, mimeType: uploadResult.file.mimeType } },
+            { text: `
 ${systemInstruction}
 
-[VISUAL & FORMAT RULES]
-1. **Use Emojis**: Add emojis to section headers (e.g., ## 🏰 Database).
-2. **Highlighting**: Use **bold** for key terms and prices.
-3. **Links**: Use blue links for inline citations [[1]].
-4. **Structure**: Use bullet points and tables for readability.
+[STRICT VISUAL RULES]
+1. **Emojis**: HEADERS MUST HAVE EMOJIS (e.g. ## 🏰 Title).
+2. **Citations**: Use [[1]], [[2]] format matching SOURCE_INDEX.
+3. **Links**: Use standard markdown [Title](URL) or automatic links.
+4. **No Duplication**: Do not repeat info.
 
-[STRICT OUTPUT RULES]
-1. **Citation Style**: Use the "SOURCE_INDEX" provided in the file. Format: [[1]], [[2]]. 
-   - Do NOT use [Title](URL).
-   - Example: "According to the guide [[1]], the price is..."
-2. **No Duplication**: Do NOT repeat the database content in the Cross-Check section. If there is no new info from web search, just say "No additional info found."
-3. **Markdown Only**: NO HTML tags.
-4. **No Reference List**: Do NOT list references at the bottom.
-
-${webContextText}
+${webContext}
 
 [QUESTION]
 ${query}
-                ` }
-            ]
-        }
-    ];
+            ` }
+        ]
+    }];
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: contents,
-    });
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents });
+    
+    // Cleanup
+    await ai.files.delete({ name: uploadResult.file.name });
 
-    // 7. Cleanup Remote File (Async)
-    (async () => {
-        try {
-            await ai.files.delete({ name: uploadResult.file.name });
-            console.log("[File API] Remote file deleted.");
-        } catch (e) { console.error("Cleanup error", e); }
-    })();
+    res.json({ answer: response.text, sources, webSources });
 
-    res.json({
-        answer: response.text,
-        docCount: docCount,
-        sources: sources, // Send formatted sources with indices
-        webSources: webSources
-    });
-
-  } catch (error) {
-    console.error('[File API Error]', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   } finally {
-    // Cleanup Local File
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-        console.log("[File API] Local file deleted.");
-    }
+    if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`🚀 Server running on ${port}`));
