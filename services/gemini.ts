@@ -73,7 +73,7 @@ export class GeminiService {
           debugSnippets: []
         };
       } catch (err) {
-        return { answer: "❌ 서버 연결 실패. 관리자에게 문의하세요.", sources: [], webSources: [], debugSnippets: [] };
+        return { answer: `❌ 서버 연결 실패 (${BACKEND_URL}). 관리자에게 문의하세요.`, sources: [], webSources: [], debugSnippets: [] };
       }
     }
 
@@ -112,12 +112,12 @@ export class GeminiService {
         return { ...d, score };
     }).sort((a,b) => b.score - a.score).slice(0, 25);
 
-    // Prepare Sources with defaults
+    // Prepare Sources with defaults to FIX TS ERROR
     const sources = Array.from(new Set(docs.map((d: any) => JSON.stringify({ 
-        title: d.metadata?.title || "Untitled", 
-        url: d.metadata?.url || "#", 
-        date: d.metadata?.date || "", 
-        type: d.metadata?.type || "BLOG"
+        title: d.metadata?.title || "Untitled", // Fix: Default string
+        url: d.metadata?.url || "#",           // Fix: Default string
+        date: d.metadata?.date || "",          // Fix: Default string
+        type: d.metadata?.type || "BLOG"       // Fix: Default string
     })))).map((s: any, i) => ({ ...JSON.parse(s), index: i + 1 }));
 
     const sourceMap = new Map(sources.map((s: any) => [s.url||s.title, s.index]));
