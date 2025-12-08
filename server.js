@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -16,6 +15,7 @@ const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Allow all origins to prevent connection errors
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -34,23 +34,25 @@ else supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 if (!API_KEY) console.error("❌ MISSING: Google API Key");
 else ai = new GoogleGenAI({ apiKey: API_KEY });
 
+// Helper: Web Search
 async function fetchWebInfo(query) {
   if (!ai) return { text: "", sources: [] };
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Search web for: "${query}". Focus on prices, hours, reviews.`,
+      contents: `Search web for: "${query}". Focus on prices, hours, and reviews.`,
       config: { tools: [{ googleSearch: {} }] },
     });
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     const webSources = chunks.map(c => c.web ? { title: c.web.title, url: c.web.uri } : null).filter(Boolean);
-    return { text: response.text || "No web results.", sources: webSources };
+    return { text: response.text || "웹 검색 결과를 찾을 수 없습니다.", sources: webSources };
   } catch (e) {
     console.error("Web Search Error", e);
     return { text: "(Web search failed)", sources: [] };
   }
 }
 
+// Helper: Extract unique sources with safe defaults
 function extractSources(documents) {
     const uniqueMap = new Map();
     documents.forEach(doc => {
@@ -83,16 +85,17 @@ app.post('/api/chat/full-context', async (req, res) => {
     const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
 
     const contextText = documents.map(doc => {
-        const key = doc.metadata.url || doc.metadata.title || "unknown";
+        const meta = doc.metadata || {};
+        const key = meta.url || meta.title || "unknown";
         const idx = sourceMap.get(key) || '?';
-        return `[Source ID: ${idx}]\n[Title: ${doc.metadata.title}]\n${doc.content}`;
+        return `[Source ID: ${idx}]\n[Title: ${meta.title || 'Untitled'}]\n${doc.content}`;
     }).join('\n\n');
 
     let webContext = "";
     let webSources = [];
     if (useWebSearch) {
         const webRes = await fetchWebInfo(query);
-        webContext = `\n[## 🌐 Web Search Results]\n${webRes.text}`;
+        webContext = `\n[## 🌐 Web Search Results (Cross-Check)]\n${webRes.text}`;
         webSources = webRes.sources;
     }
 
@@ -101,8 +104,9 @@ ${systemInstruction}
 
 [VISUAL & FORMAT RULES]
 1. **Emojis**: Use emojis in ALL headers (e.g., ## 🏰 Database).
-2. **Links**: Use blue links.
-3. **Citations**: Use [[1]] format.
+2. **Links**: Use Markdown links.
+3. **Citations**: Use [[1]], [[2]] format to match Source IDs.
+4. **No HTML**: Use Markdown tables/lists only.
 
 [CONTEXT]
 ${contextText}
@@ -132,19 +136,25 @@ app.post('/api/chat/file-api', async (req, res) => {
     const sources = extractSources(documents);
     const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
 
-    const fileContent = documents.map(doc => `
-SOURCE_INDEX: [[${sourceMap.get(doc.metadata.url || doc.metadata.title) || '?'}]]
-SOURCE_TITLE: ${doc.metadata.title}
-SOURCE_URL: ${doc.metadata.url}
+    // Inject Source IDs into the file content
+    const fileContent = documents.map(doc => {
+        const meta = doc.metadata || {};
+        const key = meta.url || meta.title || "unknown";
+        return `
+SOURCE_INDEX: [[${sourceMap.get(key) || '?'}]]
+SOURCE_TITLE: ${meta.title || 'Untitled'}
+SOURCE_URL: ${meta.url || '#'}
 CONTENT:
 ${doc.content}
 --------------------------------------------------
-`).join('\n');
+`;
+    }).join('\n');
 
     const fileName = `kb_${Date.now()}.txt`;
     tempFilePath = path.join(__dirname, fileName);
     fs.writeFileSync(tempFilePath, fileContent);
 
+    // Upload
     uploadResult = await ai.files.upload({ file: tempFilePath, config: { mimeType: 'text/plain' } });
     
     let state = uploadResult.file.state;
@@ -154,11 +164,12 @@ ${doc.content}
         state = check.file.state;
     }
 
+    // Web Search Injection
     let webContext = "";
     let webSources = [];
     if (useWebSearch) {
         const webRes = await fetchWebInfo(query);
-        webContext = `\n[CONTEXT 2: Web Search Results]\n${webRes.text}`;
+        webContext = `\n[CONTEXT 2: Web Search Results (For Cross-Check)]\n${webRes.text}`;
         webSources = webRes.sources;
     }
 
@@ -172,7 +183,7 @@ ${systemInstruction}
 [STRICT VISUAL RULES]
 1. **Emojis**: HEADERS MUST HAVE EMOJIS (e.g. ## 🏰 Title).
 2. **Citations**: Use [[1]], [[2]] format matching SOURCE_INDEX.
-3. **Links**: Use standard markdown [Title](URL) or automatic links.
+3. **Links**: Use standard markdown.
 4. **No Duplication**: Do not repeat info.
 
 ${webContext}
@@ -185,6 +196,7 @@ ${query}
 
     const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents });
     
+    // Cleanup remote file
     await ai.files.delete({ name: uploadResult.file.name });
 
     res.json({ answer: response.text, sources, webSources });
@@ -193,6 +205,7 @@ ${query}
     console.error(err);
     res.status(500).json({ error: err.message });
   } finally {
+    // Cleanup local file
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
   }
 });
