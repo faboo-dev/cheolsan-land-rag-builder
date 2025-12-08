@@ -176,6 +176,7 @@ export class GeminiService {
 ${doc.content}
     `}).join('\n\n');
 
+    // Fix: Explicitly type webResult to resolve TS2322
     let webResult: { text: string; sources: any[] } = { text: "Web Search Disabled", sources: [] };
     if (useWebSearch) webResult = await this.fetchWebInfo(query);
 
