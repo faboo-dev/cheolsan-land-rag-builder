@@ -13,15 +13,12 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Resolve directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Middleware - Allow ALL origins to prevent connection errors
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// --- Config ---
 console.log("Starting Cheolsan Land Server...");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -37,7 +34,6 @@ else supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 if (!API_KEY) console.error("❌ MISSING: Google API Key");
 else ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// --- Helpers ---
 async function fetchWebInfo(query) {
   if (!ai) return { text: "", sources: [] };
   try {
@@ -58,16 +54,20 @@ async function fetchWebInfo(query) {
 function extractSources(documents) {
     const uniqueMap = new Map();
     documents.forEach(doc => {
-        const meta = doc.metadata;
-        const key = meta.url || meta.title; 
+        const meta = doc.metadata || {};
+        const key = meta.url || meta.title || "unknown"; 
         if (key && !uniqueMap.has(key)) {
-            uniqueMap.set(key, { ...meta });
+            uniqueMap.set(key, { 
+                title: meta.title || "Untitled",
+                url: meta.url || "#",
+                date: meta.date || "",
+                type: meta.type || "BLOG"
+            });
         }
     });
     return Array.from(uniqueMap.values()).map((s, i) => ({ ...s, index: i + 1 }));
 }
 
-// --- Routes ---
 app.get('/', (req, res) => res.json({ status: 'running', mode: 'Unified Server' }));
 
 // 🔥 MODE 1: Full Context
@@ -83,7 +83,8 @@ app.post('/api/chat/full-context', async (req, res) => {
     const sourceMap = new Map(sources.map(s => [s.url || s.title, s.index]));
 
     const contextText = documents.map(doc => {
-        const idx = sourceMap.get(doc.metadata.url || doc.metadata.title) || '?';
+        const key = doc.metadata.url || doc.metadata.title || "unknown";
+        const idx = sourceMap.get(key) || '?';
         return `[Source ID: ${idx}]\n[Title: ${doc.metadata.title}]\n${doc.content}`;
     }).join('\n\n');
 
@@ -146,7 +147,6 @@ ${doc.content}
 
     uploadResult = await ai.files.upload({ file: tempFilePath, config: { mimeType: 'text/plain' } });
     
-    // Wait for active
     let state = uploadResult.file.state;
     while (state === 'PROCESSING') {
         await new Promise(r => setTimeout(r, 1000));
@@ -185,7 +185,6 @@ ${query}
 
     const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents });
     
-    // Cleanup
     await ai.files.delete({ name: uploadResult.file.name });
 
     res.json({ answer: response.text, sources, webSources });
