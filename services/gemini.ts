@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { DebugSnippet } from "../types";
 import { supabase } from "./supabase";
@@ -6,7 +5,7 @@ import { supabase } from "./supabase";
 const EMBEDDING_MODEL = "text-embedding-004";
 const CHAT_MODEL = "gemini-2.5-flash";
 
-// Fix: Ensure no double slashes in URL
+// Fix: Remove trailing slash safely
 // @ts-ignore
 const RAW_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 const BACKEND_URL = RAW_BACKEND_URL.replace(/\/$/, "");
@@ -42,7 +41,6 @@ export class GeminiService {
         config: { tools: [{ googleSearch: {} }] },
       });
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      // Fix TS error: ensure title and url are strings
       const sources = chunks.map((c: any) => c.web ? { title: c.web.title || "Web Result", url: c.web.uri || "#" } : null).filter(Boolean);
       return { text: response.text || "", sources };
     } catch (e) {
@@ -109,11 +107,12 @@ export class GeminiService {
     const qLower = query.toLowerCase();
     docs = docs.map((d: any) => {
         let score = d.baseScore;
-        if (d.metadata?.title?.toLowerCase().includes(qLower)) score += 10;
+        const title = d.metadata?.title || "";
+        if (title.toLowerCase().includes(qLower)) score += 10;
         return { ...d, score };
     }).sort((a,b) => b.score - a.score).slice(0, 25);
 
-    // Fix TS error: Provide strict default values for all fields
+    // Prepare Sources with defaults
     const sources = Array.from(new Set(docs.map((d: any) => JSON.stringify({ 
         title: d.metadata?.title || "Untitled", 
         url: d.metadata?.url || "#", 
@@ -124,12 +123,13 @@ export class GeminiService {
     const sourceMap = new Map(sources.map((s: any) => [s.url||s.title, s.index]));
     
     const context = docs.map((d: any) => {
-        const key = d.metadata?.url || d.metadata?.title || "unknown";
+        const meta = d.metadata || {};
+        const key = meta.url || meta.title || "unknown";
         const idx = sourceMap.get(key) || "?";
         return `[Source ID: ${idx}]\n${d.content}`;
     }).join('\n\n');
 
-    // Fix TS error: Explicit type definition
+    // Fix TS Error: Explicit type
     let webResult: { text: string; sources: any[] } = { text: "", sources: [] };
     if (useWebSearch) webResult = await this.fetchWebInfo(query);
 
