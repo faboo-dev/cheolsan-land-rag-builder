@@ -1,238 +1,143 @@
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenAI } from '@google/genai';
-
-dotenv.config();
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(cors({ origin: '*' }));
+app.use(cors());
 app.use(express.json());
 
-console.log("=".repeat(50));
-console.log("🚀 철산랜드 챗봇 서버 시작");
-console.log("=".repeat(50));
-
+// 환경변수
+const API_KEY = process.env.API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const API_KEY = process.env.API_KEY;
 
-console.log("환경변수 체크:");
-console.log("- SUPABASE_URL:", SUPABASE_URL ? "✅ 있음" : "❌ 없음");
-console.log("- SUPABASE_ANON_KEY:", SUPABASE_ANON_KEY ? "✅ 있음" : "❌ 없음");
-console.log("- API_KEY:", API_KEY ? "✅ 있음" : "❌ 없음");
+// Supabase 클라이언트
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let supabase = null;
-let ai = null;
+// Google AI 클라이언트
+const genAI = new GoogleGenerativeAI(API_KEY);
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error("❌ Supabase 설정이 없습니다!");
-} else {
-  try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    console.log("✅ Supabase 클라이언트 생성 완료");
-  } catch (err) {
-    console.error("❌ Supabase 초기화 실패:", err.message);
-  }
-}
-
-if (!API_KEY) {
-  console.error("❌ Google API Key가 없습니다!");
-} else {
-  try {
-    ai = new GoogleGenAI({ apiKey: API_KEY });
-    console.log("✅ Google AI 클라이언트 생성 완료");
-  } catch (err) {
-    console.error("❌ Google AI 초기화 실패:", err.message);
-  }
-}
-
+// 상태 체크
 app.get('/', (req, res) => {
   res.json({ 
     status: 'running', 
-    message: '철산랜드 챗봇 서버가 정상 작동 중입니다!',
-    timestamp: new Date().toISOString(),
-    config: {
-      supabase: !!supabase,
-      ai: !!ai
-    }
+    message: '철산랜드 RAG 서버 (Gemini 2.0 Flash)'
   });
 });
 
-// 헬스체크 엔드포인트
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok',
-    supabase: !!supabase,
-    ai: !!ai,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// 메인 챗 엔드포인트
+// 메인 채팅 API
 app.post('/api/chat', async (req, res) => {
-  const startTime = Date.now();
+  console.log('🔵 /api/chat 요청 받음');
   
   try {
-    console.log("\n" + "=".repeat(50));
-    console.log("📥 새로운 요청 받음");
-    console.log("시간:", new Date().toISOString());
-    
-    // 1. 기본 검증
-    if (!supabase || !ai) {
-      console.error("❌ 서버 초기화 안 됨");
-      return res.status(500).json({ 
-        error: '서버가 제대로 초기화되지 않았습니다.',
-        details: {
-          supabase: !!supabase,
-          ai: !!ai
-        }
-      });
-    }
-
-    const { query, systemInstruction } = req.body;
+    const { query, systemInstruction, useWebSearch } = req.body;
     
     if (!query) {
-      console.error("❌ 질문 없음");
-      return res.status(400).json({ error: '질문을 입력해주세요.' });
+      return res.status(400).json({ error: '질문을 입력해주세요' });
     }
 
-    console.log("질문:", query);
-    console.log("시스템 인스트럭션 길이:", systemInstruction?.length || 0);
+    console.log('📥 질문:', query);
+    console.log('🌐 웹 검색:', useWebSearch);
 
-    // 2. Supabase에서 문서 가져오기
-    console.log("\n📚 Step 1: Supabase 문서 로드 중...");
-    
-    let documents;
-    try {
-      const { data, error: dbError } = await supabase
-        .from('documents')
-        .select('content, metadata')
-        .limit(50); // 일단 50개로 제한
+    // 1. Supabase에서 문서 가져오기
+    console.log('📚 Supabase 문서 로딩 중...');
+    const { data: documents, error: dbError } = await supabase
+      .from('documents')
+      .select('content, metadata')
+      .limit(100);
 
-      if (dbError) {
-        throw new Error(`Supabase 에러: ${dbError.message}`);
-      }
-
-      if (!data || data.length === 0) {
-        throw new Error("Supabase에 문서가 없습니다");
-      }
-
-      documents = data;
-      console.log(`✅ ${documents.length}개 문서 로드 완료`);
-      
-    } catch (err) {
-      console.error("❌ 문서 로드 실패:", err.message);
+    if (dbError) {
+      console.error('❌ Supabase 에러:', dbError);
       return res.status(500).json({ 
-        error: 'Supabase에서 문서를 불러올 수 없습니다.',
-        details: err.message
+        error: 'DB 조회 실패', 
+        details: dbError.message 
       });
     }
 
-    // 3. 컨텍스트 구성
-    console.log("\n📝 Step 2: 컨텍스트 구성 중...");
+    console.log(`✅ 문서 로드 완료: ${documents.length}개`);
+
+    // 2. 문서 텍스트 생성
+    const contextText = documents
+      .map((doc, idx) => `[문서 ${idx + 1}]\n${doc.content}`)
+      .join('\n\n---\n\n');
+
+    console.log(`📝 컨텍스트 길이: ${contextText.length} 글자`);
+
+    // 3. Gemini 2.0 Flash API 호출
+    console.log('🤖 Gemini 2.0 Flash 호출 중...');
     
-    const context = documents.map((doc, idx) => {
-      const meta = doc.metadata || {};
-      return `[문서 ${idx + 1}]\n제목: ${meta.title || '제목없음'}\n내용: ${doc.content?.substring(0, 500)}...`;
-    }).join('\n\n---\n\n');
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.0-flash-exp'  // ← 최신 Gemini 2.0 Flash
+    });
 
-    console.log(`✅ 컨텍스트 길이: ${context.length} 글자`);
+    const prompt = `${systemInstruction || '당신은 철산랜드의 친절한 AI 어시스턴트입니다.'}
 
-    // 4. AI 답변 생성
-    console.log("\n🤖 Step 3: AI 답변 생성 중...");
-    
-    const prompt = `${systemInstruction || '당신은 철산랜드의 AI 어시스턴트입니다.'}
+**제공된 문서:**
+${contextText}
 
-다음은 철산랜드의 콘텐츠입니다:
+**사용자 질문:**
+${query}
 
-${context}
+**답변 규칙:**
+1. 제공된 문서 내용을 기반으로 정확하게 답변하세요
+2. 정보를 언급할 때 [[1]], [[2]] 형식으로 출처번호를 표시하세요
+3. 마크다운 문법을 사용하세요
+4. 문서에 없는 내용은 "제공된 자료에 해당 내용이 없습니다"라고 명시하세요`;
 
-질문: ${query}
+    const result = await model.generateContent(prompt);
+    const answer = result.response.text();
 
-답변:`;
+    console.log('✅ Gemini 응답 받음');
+    console.log(`📤 답변 길이: ${answer.length} 글자`);
 
-    console.log(`프롬프트 길이: ${prompt.length} 글자`);
-
-    let answer;
-    try {
-      const response = await ai.models.generateContent({
-       model: 'gemini-1.5-flash',
-
-        contents: prompt
-      });
-
-      answer = response.text;
-      
-      if (!answer) {
-        throw new Error("AI가 빈 응답을 반환했습니다");
+    // 4. 웹 검색 (옵션)
+    let webSources = [];
+    if (useWebSearch) {
+      console.log('🌐 웹 검색 시작...');
+      try {
+        const searchModel = genAI.getGenerativeModel({
+          model: 'gemini-2.0-flash-exp',
+          tools: [{ googleSearch: {} }]
+        });
+        
+        const searchResult = await searchModel.generateContent(
+          `${query}에 대한 최신 정보를 웹에서 검색하여 요약해주세요.`
+        );
+        
+        webSources = [{
+          title: '웹 검색 결과',
+          content: searchResult.response.text()
+        }];
+        
+        console.log('✅ 웹 검색 완료');
+      } catch (searchError) {
+        console.error('⚠️ 웹 검색 실패:', searchError.message);
       }
-
-      console.log(`✅ 답변 생성 완료 (${answer.length} 글자)`);
-      
-    } catch (err) {
-      console.error("❌ AI 답변 생성 실패:", err.message);
-      return res.status(500).json({ 
-        error: 'AI 답변 생성에 실패했습니다.',
-        details: err.message
-      });
     }
 
     // 5. 응답 반환
-    const elapsed = Date.now() - startTime;
-    console.log(`\n✅ 요청 처리 완료 (${elapsed}ms)`);
-    console.log("=".repeat(50) + "\n");
-
     res.json({
-      answer: answer,
-      sources: [],
-      webSources: [],
-      stats: {
-        documentsUsed: documents.length,
-        responseTime: `${elapsed}ms`,
-        timestamp: new Date().toISOString()
-      }
+      answer,
+      sources: documents.slice(0, 10).map((doc, idx) => ({
+        id: idx + 1,
+        title: doc.metadata?.title || `문서 ${idx + 1}`,
+        content: doc.content.substring(0, 200) + '...'
+      })),
+      webSources
     });
 
-  } catch (err) {
-    const elapsed = Date.now() - startTime;
-    console.error("\n❌ 치명적 오류:", err);
-    console.error("스택:", err.stack);
-    console.log(`처리 시간: ${elapsed}ms`);
-    console.log("=".repeat(50) + "\n");
-    
-    // 에러 응답도 반드시 JSON으로
+  } catch (error) {
+    console.error('❌ 서버 에러:', error);
     res.status(500).json({ 
-      error: '서버 내부 오류가 발생했습니다.',
-      details: err.message,
-      timestamp: new Date().toISOString()
+      error: 'AI 답변 생성에 실패했습니다.',
+      details: JSON.stringify(error, null, 2)
     });
   }
 });
 
-// 404 핸들러
-app.use((req, res) => {
-  res.status(404).json({ 
-    error: '요청한 경로를 찾을 수 없습니다.',
-    path: req.path
-  });
-});
-
-// 전역 에러 핸들러
-app.use((err, req, res, next) => {
-  console.error('전역 에러:', err);
-  res.status(500).json({ 
-    error: '서버 오류',
-    details: err.message
-  });
-});
-
-app.listen(port, () => {
-  console.log("\n" + "=".repeat(50));
-  console.log(`🌐 서버 실행 중: 포트 ${port}`);
-  console.log(`📍 URL: http://localhost:${port}`);
-  console.log("=".repeat(50) + "\n");
+// 서버 시작
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`🚀 서버가 포트 ${PORT}에서 실행중입니다`);
 });
