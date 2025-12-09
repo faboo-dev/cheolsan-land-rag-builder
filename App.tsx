@@ -41,6 +41,10 @@ function App() {
         ? 'http://localhost:3000'
         : 'https://cheolsan-land-rag-builder.onrender.com';
 
+      console.log('🔵 1. 요청 시작');
+      console.log('🔵 2. API URL:', `${API_URL}/api/chat`);
+      console.log('🔵 3. 질문:', userMessage);
+
       const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: {
@@ -59,11 +63,40 @@ function App() {
         }),
       });
 
+      console.log('🔵 4. 응답 받음');
+      console.log('🔵 5. 상태 코드:', response.status);
+      console.log('🔵 6. 상태 텍스트:', response.statusText);
+      console.log('🔵 7. Content-Type:', response.headers.get('content-type'));
+
+      // 응답 텍스트 먼저 읽기
+      const responseText = await response.text();
+      console.log('🔵 8. 응답 텍스트 길이:', responseText.length);
+      console.log('🔵 9. 응답 내용 (앞부분):', responseText.substring(0, 300));
+
       if (!response.ok) {
-        throw new Error(`서버 오류: ${response.status}`);
+        console.error('🔴 HTTP 에러:', response.status);
+        throw new Error(`서버 에러 ${response.status}: ${responseText}`);
       }
 
-      const data = await response.json();
+      if (responseText.trim() === '') {
+        console.error('🔴 빈 응답');
+        throw new Error('서버가 빈 응답을 반환했습니다');
+      }
+
+      // JSON 파싱 시도
+      console.log('🔵 10. JSON 파싱 시도...');
+      let data;
+      try {
+        data = JSON.parse(responseText);
+        console.log('🟢 11. JSON 파싱 성공!');
+        console.log('🟢 12. 답변 길이:', data.answer?.length || 0);
+      } catch (parseError: any) {
+        console.error('🔴 JSON 파싱 실패:', parseError.message);
+        console.error('🔴 원본 텍스트:', responseText);
+        throw new Error(`JSON 파싱 실패: ${parseError.message}\n\n서버 응답:\n${responseText.substring(0, 500)}`);
+      }
+
+      console.log('🟢 13. 메시지 추가');
 
       setMessages(prev => [...prev, { 
         role: 'assistant', 
@@ -72,11 +105,22 @@ function App() {
         webSources: data.webSources
       }]);
 
-    } catch (error) {
-      console.error('❌ 오류:', error);
+      console.log('🟢 14. 완료!');
+
+    } catch (error: any) {
+      console.error('🔴🔴🔴 에러 발생 🔴🔴🔴');
+      console.error('에러 타입:', error.constructor.name);
+      console.error('에러 메시지:', error.message);
+      console.error('전체 에러:', error);
+      
+      let errorMessage = '⚠️ **오류가 발생했습니다**\n\n';
+      errorMessage += `**에러 타입:** ${error.constructor.name}\n\n`;
+      errorMessage += `**에러 메시지:**\n${error.message}\n\n`;
+      errorMessage += '**개발자 도구 Console을 확인해주세요** (F12)';
+      
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: '⚠️ 죄송합니다. 답변 생성 중 오류가 발생했습니다.'
+        content: errorMessage
       }]);
     } finally {
       setIsLoading(false);
@@ -87,13 +131,11 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 p-4">
       <div className="max-w-4xl mx-auto h-[90vh] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         
-        {/* 헤더 */}
         <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
           <h1 className="text-3xl font-bold">🏰 철산랜드 AI 챗봇</h1>
           <p className="text-sm opacity-90 mt-2">File Search API로 빠르고 정확한 답변을 제공합니다</p>
         </div>
 
-        {/* 웹 검색 토글 */}
         <div className="bg-gray-50 p-3 border-b">
           <label className="flex items-center cursor-pointer">
             <input
@@ -108,7 +150,6 @@ function App() {
           </label>
         </div>
 
-        {/* 메시지 영역 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
           {messages.length === 0 ? (
             <div className="text-center py-20">
@@ -124,52 +165,12 @@ function App() {
                     : 'bg-white border border-gray-200 shadow-sm'
                 }`}>
                   {msg.role === 'user' ? (
-                    <p className="text-sm">{msg.content}</p>
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                   ) : (
                     <div className="prose prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {msg.content}
                       </ReactMarkdown>
-                      
-                      {/* 출처 표시 */}
-                      {msg.sources && msg.sources.length > 0 && (
-                        <div className="mt-4 pt-3 border-t text-xs">
-                          <p className="font-bold mb-2">📚 출처:</p>
-                          <div className="space-y-1">
-                            {msg.sources.map((s: any) => (
-                              <a 
-                                key={s.index} 
-                                href={s.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="block text-blue-600 hover:underline"
-                              >
-                                [[{s.index}]] {s.title}
-                              </a>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* 웹 검색 출처 */}
-                      {msg.webSources && msg.webSources.length > 0 && (
-                        <div className="mt-2 pt-2 border-t text-xs">
-                          <p className="font-bold mb-2">🌐 웹 검색 출처:</p>
-                          <div className="space-y-1">
-                            {msg.webSources.map((s: any, i: number) => (
-                              <a 
-                                key={i} 
-                                href={s.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="block text-blue-600 hover:underline"
-                              >
-                                {s.title}
-                              </a>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -192,7 +193,6 @@ function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* 입력 영역 */}
         <form onSubmit={handleSubmit} className="p-4 bg-white border-t flex gap-2">
           <input
             type="text"
