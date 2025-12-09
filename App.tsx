@@ -37,9 +37,9 @@ function App() {
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
 
     try {
-      const API_URL = window.location.hostname === 'localhost' 
-        ? 'http://localhost:3000'
-        : 'https://cheolsan-land-rag-builder.onrender.com';
+   const API_URL = window.location.hostname === 'localhost' 
+  ? 'http://localhost:3000'
+  : 'https://cheolsan-server.onrender.com';
 
       console.log('🔵 1. 요청 시작');
       console.log('🔵 2. API URL:', `${API_URL}/api/chat`);
