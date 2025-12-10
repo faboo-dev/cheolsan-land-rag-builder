@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import Admin from './Admin';
 import './App.css';
 
 interface Message {
@@ -11,6 +12,15 @@ interface Message {
 }
 
 function App() {
+  // URL 경로 확인 - /admin이면 관리자 페이지
+  const isAdminPage = window.location.pathname === '/admin';
+  
+  // 관리자 페이지면 Admin 컴포넌트 렌더링
+  if (isAdminPage) {
+    return <Admin />;
+  }
+
+  // 기존 챗봇 코드
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -37,9 +47,9 @@ function App() {
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
 
     try {
-   const API_URL = window.location.hostname === 'localhost' 
-  ? 'http://localhost:3000'
-  : 'https://cheolsan-server.onrender.com';
+      const API_URL = window.location.hostname === 'localhost' 
+        ? 'http://localhost:3000'
+        : 'https://cheolsan-server.onrender.com';
 
       console.log('🔵 1. 요청 시작');
       console.log('🔵 2. API URL:', `${API_URL}/api/chat`);
@@ -52,26 +62,15 @@ function App() {
         },
         body: JSON.stringify({
           query: userMessage,
-          systemInstruction: `당신은 철산랜드의 친절한 AI 어시스턴트입니다.
-
-**답변 규칙:**
-1. 정보를 언급할 때 반드시 [[1]], [[2]] 형식으로 출처번호를 표시하세요.
-2. 모든 제목에 관련 이모지를 추가하세요 (예: ## 🏰 제목)
-3. 마크다운 문법을 사용하세요 (표, 리스트, 링크 등)
-4. 정확하고 구체적으로 답변하세요.`,
           useWebSearch: useWebSearch
         }),
       });
 
       console.log('🔵 4. 응답 받음');
       console.log('🔵 5. 상태 코드:', response.status);
-      console.log('🔵 6. 상태 텍스트:', response.statusText);
-      console.log('🔵 7. Content-Type:', response.headers.get('content-type'));
 
-      // 응답 텍스트 먼저 읽기
       const responseText = await response.text();
-      console.log('🔵 8. 응답 텍스트 길이:', responseText.length);
-      console.log('🔵 9. 응답 내용 (앞부분):', responseText.substring(0, 300));
+      console.log('🔵 6. 응답 텍스트 길이:', responseText.length);
 
       if (!response.ok) {
         console.error('🔴 HTTP 에러:', response.status);
@@ -83,20 +82,22 @@ function App() {
         throw new Error('서버가 빈 응답을 반환했습니다');
       }
 
-      // JSON 파싱 시도
-      console.log('🔵 10. JSON 파싱 시도...');
       let data;
       try {
         data = JSON.parse(responseText);
-        console.log('🟢 11. JSON 파싱 성공!');
-        console.log('🟢 12. 답변 길이:', data.answer?.length || 0);
+        console.log('🟢 JSON 파싱 성공!');
+        
+        // 커스텀 프롬프트 사용 여부 표시
+        if (data.usingCustomPrompt) {
+          console.log('✅ 관리자 커스텀 프롬프트 사용 중');
+        } else {
+          console.log('📋 기본 프롬프트 사용 중');
+        }
+        
       } catch (parseError: any) {
         console.error('🔴 JSON 파싱 실패:', parseError.message);
-        console.error('🔴 원본 텍스트:', responseText);
-        throw new Error(`JSON 파싱 실패: ${parseError.message}\n\n서버 응답:\n${responseText.substring(0, 500)}`);
+        throw new Error(`JSON 파싱 실패: ${parseError.message}`);
       }
-
-      console.log('🟢 13. 메시지 추가');
 
       setMessages(prev => [...prev, { 
         role: 'assistant', 
@@ -105,18 +106,14 @@ function App() {
         webSources: data.webSources
       }]);
 
-      console.log('🟢 14. 완료!');
+      console.log('🟢 완료!');
 
     } catch (error: any) {
-      console.error('🔴🔴🔴 에러 발생 🔴🔴🔴');
-      console.error('에러 타입:', error.constructor.name);
-      console.error('에러 메시지:', error.message);
-      console.error('전체 에러:', error);
+      console.error('🔴 에러 발생:', error);
       
       let errorMessage = '⚠️ **오류가 발생했습니다**\n\n';
-      errorMessage += `**에러 타입:** ${error.constructor.name}\n\n`;
-      errorMessage += `**에러 메시지:**\n${error.message}\n\n`;
-      errorMessage += '**개발자 도구 Console을 확인해주세요** (F12)';
+      errorMessage += `**에러 메시지:** ${error.message}\n\n`;
+      errorMessage += '잠시 후 다시 시도해주세요.';
       
       setMessages(prev => [...prev, { 
         role: 'assistant', 
@@ -132,8 +129,18 @@ function App() {
       <div className="max-w-4xl mx-auto h-[90vh] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         
         <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
-          <h1 className="text-3xl font-bold">🏰 철산랜드 AI 챗봇</h1>
-          <p className="text-sm opacity-90 mt-2">File Search API로 빠르고 정확한 답변을 제공합니다</p>
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-3xl font-bold">🏰 철산랜드 AI 챗봇</h1>
+              <p className="text-sm opacity-90 mt-2">Gemini 2.0 Flash로 빠르고 정확한 답변 제공</p>
+            </div>
+            <a 
+              href="/admin" 
+              className="bg-white text-purple-600 px-4 py-2 rounded-lg font-bold hover:bg-gray-100 transition text-sm"
+            >
+              🔧 관리자
+            </a>
+          </div>
         </div>
 
         <div className="bg-gray-50 p-3 border-b">
@@ -155,6 +162,7 @@ function App() {
             <div className="text-center py-20">
               <h2 className="text-2xl font-bold text-gray-700 mb-4">👋 안녕하세요!</h2>
               <p className="text-gray-600">철산랜드에 대해 무엇이든 물어보세요.</p>
+              <p className="text-sm text-gray-500 mt-2">전체 {/* 문서 개수는 첫 응답 후 표시 */} 문서를 분석하여 답변합니다.</p>
             </div>
           ) : (
             messages.map((msg, idx) => (
@@ -167,10 +175,39 @@ function App() {
                   {msg.role === 'user' ? (
                     <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                   ) : (
-                    <div className="prose prose-sm max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
+                    <div>
+                      <div className="prose prose-sm max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                      
+                      {/* 출처 표시 */}
+                      {msg.sources && msg.sources.length > 0 && (
+                        <div className="mt-4 pt-3 border-t text-xs">
+                          <p className="font-bold text-gray-700 mb-2">📚 참고 문서:</p>
+                          <div className="space-y-1">
+                            {msg.sources.slice(0, 5).map((src: any) => (
+                              <div key={src.id} className="text-gray-600 bg-gray-50 p-2 rounded">
+                                <span className="font-bold">[{src.id}]</span> {src.title} 
+                                <span className="text-gray-400 ml-2">({src.date})</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 웹 검색 결과 */}
+                      {msg.webSources && msg.webSources.length > 0 && (
+                        <div className="mt-3 pt-3 border-t text-xs">
+                          <p className="font-bold text-gray-700 mb-2">🌐 웹 검색 결과:</p>
+                          {msg.webSources.map((src: any, idx: number) => (
+                            <div key={idx} className="text-gray-600 bg-blue-50 p-2 rounded">
+                              {src.content}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -198,7 +235,7 @@ function App() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="새로운 호기심이 가득한 것에 질문이 있나요?"
+            placeholder="철산랜드에 대해 궁금한 점을 물어보세요..."
             disabled={isLoading}
             className="flex-1 p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
