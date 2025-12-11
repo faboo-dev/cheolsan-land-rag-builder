@@ -1,9 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DebugSnippet } from "../types";
 import { supabase } from "./supabase";
 
 const EMBEDDING_MODEL = "text-embedding-004";
-const CHAT_MODEL = "gemini-2.5-flash";
+const CHAT_MODEL = "gemini-2.0-flash-exp";
 
 // Fix: Remove trailing slash safely
 // @ts-ignore
@@ -13,20 +13,19 @@ const BACKEND_URL = RAW_BACKEND_URL.replace(/\/$/, "");
 export type SearchMode = 'rag' | 'full-text' | 'file-api';
 
 export class GeminiService {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenerativeAI;
 
   constructor() {
     // @ts-ignore
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = import.meta.env.VITE_API_KEY || process.env.API_KEY || '';
+    this.ai = new GoogleGenerativeAI(apiKey);
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
     try {
-        const result = await this.ai.models.embedContent({
-          model: EMBEDDING_MODEL,
-          contents: text.replace(/\n/g, " "),
-        });
-        return result.embeddings?.[0]?.values || [];
+        const model = this.ai.getGenerativeModel({ model: EMBEDDING_MODEL });
+        const result = await model.embedContent(text.replace(/\n/g, " "));
+        return result.embedding?.values || [];
     } catch (error) {
         console.error("Embedding Error:", error);
         return [];
@@ -35,15 +34,27 @@ export class GeminiService {
 
   private async fetchWebInfo(query: string) {
     try {
-      const response = await this.ai.models.generateContent({
+      const model = this.ai.getGenerativeModel({
         model: CHAT_MODEL,
-        contents: `Search web for: "${query}"`,
-        config: { tools: [{ googleSearch: {} }] },
+        tools: [{ googleSearch: {} }]
       });
+      
+      const result = await model.generateContent(`Search web for: "${query}"`);
+      const response = result.response;
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const sources = chunks.map((c: any) => c.web ? { title: c.web.title || "Web Result", url: c.web.uri || "#" } : null).filter(Boolean);
-      return { text: response.text || "", sources };
+      const sources = chunks.map((c: any) => 
+        c.web ? { 
+          title: c.web.title || "Web Result", 
+          url: c.web.uri || "#" 
+        } : null
+      ).filter(Boolean);
+      
+      return { 
+        text: response.text() || "", 
+        sources 
+      };
     } catch (e) {
+      console.error("Web search error:", e);
       return { text: "", sources: [] };
     }
   }
@@ -57,7 +68,7 @@ export class GeminiService {
     
     // SERVER MODES
     if ((mode === 'full-text' || mode === 'file-api') && BACKEND_URL) {
-      const endpoint = mode === 'file-api' ? '/api/chat/file-api' : '/api/chat/full-context';
+      const endpoint = mode === 'file-api' ? '/api/chat' : '/api/chat';
       try {
         const res = await fetch(`${BACKEND_URL}${endpoint}`, {
           method: 'POST',
@@ -73,7 +84,13 @@ export class GeminiService {
           debugSnippets: []
         };
       } catch (err) {
-        return { answer: `❌ 서버 연결 실패 (${BACKEND_URL}). 관리자에게 문의하세요.`, sources: [], webSources: [], debugSnippets: [] };
+        console.error("Server connection error:", err);
+        return { 
+          answer: `❌ 서버 연결 실패 (${BACKEND_URL}). 관리자에게 문의하세요.`, 
+          sources: [], 
+          webSources: [], 
+          debugSnippets: [] 
+        };
       }
     }
 
@@ -84,9 +101,15 @@ export class GeminiService {
     // 1. Vector
     try {
         const emb = await this.generateEmbedding(query);
-        const { data } = await supabase.rpc('match_documents', { query_embedding: emb, match_threshold: 0.0, match_count: 100 });
+        const { data } = await supabase.rpc('match_documents', { 
+          query_embedding: emb, 
+          match_threshold: 0.0, 
+          match_count: 100 
+        });
         if (data) vectorDocs = data;
-    } catch(e) {}
+    } catch(e) {
+      console.error("Vector search error:", e);
+    }
 
     // 2. Keyword
     try {
@@ -96,7 +119,9 @@ export class GeminiService {
             const { data } = await supabase.from('documents').select('id,content,metadata').or(cond).limit(50);
             if(data) keywordDocs = data;
         }
-    } catch(e) {}
+    } catch(e) {
+      console.error("Keyword search error:", e);
+    }
 
     // Merge
     const combined = new Map();
@@ -112,12 +137,12 @@ export class GeminiService {
         return { ...d, score };
     }).sort((a,b) => b.score - a.score).slice(0, 25);
 
-    // Prepare Sources with defaults to FIX TS ERROR
+    // Prepare Sources with defaults
     const sources = Array.from(new Set(docs.map((d: any) => JSON.stringify({ 
-        title: d.metadata?.title || "Untitled", // Fix: Default string
-        url: d.metadata?.url || "#",           // Fix: Default string
-        date: d.metadata?.date || "",          // Fix: Default string
-        type: d.metadata?.type || "BLOG"       // Fix: Default string
+        title: d.metadata?.title || "Untitled",
+        url: d.metadata?.url || "#",
+        date: d.metadata?.date || "",
+        type: d.metadata?.type || "BLOG"
     })))).map((s: any, i) => ({ ...JSON.parse(s), index: i + 1 }));
 
     const sourceMap = new Map(sources.map((s: any) => [s.url||s.title, s.index]));
@@ -129,12 +154,14 @@ export class GeminiService {
         return `[Source ID: ${idx}]\n${d.content}`;
     }).join('\n\n');
 
-    // Fix TS Error: Explicit type
+    // Web search
     let webResult: { text: string; sources: any[] } = { text: "", sources: [] };
-    if (useWebSearch) webResult = await this.fetchWebInfo(query);
+    if (useWebSearch) {
+      webResult = await this.fetchWebInfo(query);
+    }
 
-    const prompt = `
-${systemInstruction}
+    const prompt = `${systemInstruction}
+
 [RULES]
 1. Use Emojis in headers (## 🏰).
 2. Citation: [[1]].
@@ -145,14 +172,31 @@ ${context}
 ${webResult.text}
 
 [QUESTION]
-${query}
-`;
-    const response = await this.ai.models.generateContent({ model: CHAT_MODEL, contents: prompt });
-    return {
-        answer: response.text,
+${query}`;
+
+    try {
+      const model = this.ai.getGenerativeModel({ model: CHAT_MODEL });
+      const result = await model.generateContent(prompt);
+      const response = result.response;
+      
+      return {
+        answer: response.text(),
         sources,
         webSources: webResult.sources,
-        debugSnippets: docs.map((d: any) => ({ score: d.score, text: d.content, sourceTitle: d.metadata?.title || "Unknown" }))
-    };
+        debugSnippets: docs.map((d: any) => ({ 
+          score: d.score, 
+          text: d.content.substring(0, 200), 
+          sourceTitle: d.metadata?.title || "Unknown" 
+        }))
+      };
+    } catch (error) {
+      console.error("Generation error:", error);
+      return {
+        answer: "❌ 답변 생성 중 오류가 발생했습니다.",
+        sources,
+        webSources: webResult.sources,
+        debugSnippets: []
+      };
+    }
   }
 }
