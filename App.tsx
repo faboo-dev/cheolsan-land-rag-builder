@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import Admin from './admin'; // 소문자 파일명
 import './App.css';
 
 interface Message {
@@ -11,21 +10,13 @@ interface Message {
 }
 
 function App() {
-  // 관리자 페이지 라우팅
-  const isAdminPage = window.location.pathname === '/admin';
-
-  if (isAdminPage) {
-    return <Admin />;
-  }
-
-  // 챗봇 메인 페이지
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [useWebSearch, setUseWebSearch] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 올바른 API URL (cheolsan-server로 변경)
+  // 올바른 API URL
   const API_URL = window.location.hostname === 'localhost'
     ? 'http://localhost:3001'
     : 'https://cheolsan-server.onrender.com';
@@ -107,7 +98,6 @@ function App() {
             />
             <span>웹 검색 사용</span>
           </label>
-          <a href="/admin" className="admin-button">🛠️ 관리자</a>
         </div>
       </header>
 
