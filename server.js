@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import fetch from 'node-fetch';
+// import fetch from 'node-fetch'; ← 이 줄 삭제!
 
 const app = express();
 app.use(cors());
