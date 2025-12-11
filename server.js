@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import fetch from 'node-fetch';
 
 const app = express();
 app.use(cors());
@@ -18,7 +19,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // Google AI 클라이언트
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-// File Search Store 정보 저장
+// File Search Store 이름 (메모리에 캐시)
 let fileSearchStoreName = null;
 
 // 기본 프롬프트
@@ -39,6 +40,43 @@ const DEFAULT_PROMPT = `당신은 철산랜드의 전문 여행 AI 어시스턴�
 - 문서에 명시된 내용만 답변
 - 추측이나 외부 지식 사용 금지
 - 정보가 없으면 "제공된 자료에서 해당 정보를 찾을 수 없습니다" 명시`;
+
+// 🔥 Store 이름 Supabase에 저장
+async function saveStoreName(storeName) {
+  try {
+    await supabase
+      .from('settings')
+      .upsert({ 
+        key: 'file_search_store_name', 
+        value: storeName,
+        updated_at: new Date().toISOString()
+      });
+    console.log('✅ Store 이름 저장 완료');
+  } catch (error) {
+    console.error('⚠️ Store 이름 저장 실패:', error);
+  }
+}
+
+// 🔥 Store 이름 Supabase에서 불러오기
+async function loadStoreName() {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'file_search_store_name')
+      .single();
+    
+    if (error && error.code !== 'PGRST116') {
+      console.error('⚠️ Store 이름 조회 실패:', error);
+      return null;
+    }
+    
+    return data?.value || null;
+  } catch (error) {
+    console.error('⚠️ Store 이름 로드 실패:', error);
+    return null;
+  }
+}
 
 // 🔥 관리자가 설정한 프롬프트 가져오기
 async function getSystemPrompt() {
@@ -67,13 +105,12 @@ async function getSystemPrompt() {
   }
 }
 
-// 🔥 File Search Store 생성 및 문서 업로드
-async function initializeFileSearchStore() {
+// 🔥 Google File Search Store 생성
+async function createFileSearchStore() {
   try {
-    console.log('📤 File Search Store 초기화 시작...');
-
-    // 1. File Search Store 생성
-    const createResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/fileSearchStores', {
+    console.log('📦 File Search Store 생성 중...');
+    
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/fileSearchStores', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -84,83 +121,139 @@ async function initializeFileSearchStore() {
       })
     });
 
-    const storeData = await createResponse.json();
-    fileSearchStoreName = storeData.name;
-    console.log(`✅ File Search Store 생성: ${fileSearchStoreName}`);
-
-    // 2. Supabase에서 문서 가져오기
-    const { data: documents, error: dbError } = await supabase
-      .from('documents')
-      .select('content, metadata');
-
-    if (dbError) {
-      throw new Error(`DB 조회 실패: ${dbError.message}`);
-    }
-
-    console.log(`✅ 문서 로드 완료: ${documents.length}개`);
-
-    // 3. 각 문서를 File Search Store에 업로드
-    console.log('⏳ 문서 업로드 중...');
+    const data = await response.json();
     
-    for (let i = 0; i < documents.length; i++) {
-      const doc = documents[i];
-      const date = doc.metadata?.date || doc.metadata?.createdAt || '날짜 미상';
-      const source = doc.metadata?.source || doc.metadata?.type || '출처 미상';
-      const title = doc.metadata?.title || `문서 ${i + 1}`;
-      
-      const fileContent = `제목: ${title}
+    if (!response.ok) {
+      throw new Error(`Store 생성 실패: ${JSON.stringify(data)}`);
+    }
+    
+    console.log(`✅ Store 생성 완료: ${data.name}`);
+    return data.name;
+  } catch (error) {
+    console.error('❌ Store 생성 실패:', error);
+    throw error;
+  }
+}
+
+// 🔥 문서 하나를 Google File Search Store에 업로드
+async function uploadDocumentToGoogle(storeName, doc, index) {
+  try {
+    const date = doc.metadata?.date || doc.metadata?.createdAt || '날짜 미상';
+    const source = doc.metadata?.source || doc.metadata?.type || '출처 미상';
+    const title = doc.metadata?.title || `문서 ${index}`;
+    
+    const fileContent = `제목: ${title}
 출처: ${source}
 날짜: ${date}
 
 ${doc.content}`;
 
-      // Blob으로 변환
-      const blob = new Blob([fileContent], { type: 'text/plain' });
-      const formData = new FormData();
-      formData.append('file', blob, `document_${i + 1}.txt`);
+    // FormData 생성
+    const boundary = '----Boundary' + Math.random().toString(36);
+    const bodyParts = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="document_${index}.txt"`,
+      `Content-Type: text/plain`,
+      ``,
+      fileContent,
+      `--${boundary}--`
+    ];
+    
+    const body = bodyParts.join('\r\n');
 
-      const uploadResponse = await fetch(
-        `https://generativelanguage.googleapis.com/upload/v1beta/${fileSearchStoreName}:uploadToFileSearchStore`,
-        {
-          method: 'POST',
-          headers: {
-            'x-goog-api-key': API_KEY
-          },
-          body: formData
-        }
-      );
-
-      if (i % 50 === 0) {
-        console.log(`📤 진행률: ${i + 1}/${documents.length}`);
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/upload/v1beta/${storeName}:uploadToFileSearchStore`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'x-goog-api-key': API_KEY
+        },
+        body: body
       }
+    );
+
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(`업로드 실패: ${JSON.stringify(result)}`);
     }
-
-    console.log('🎉 모든 문서 업로드 완료!');
-    return fileSearchStoreName;
-
+    
+    return result;
   } catch (error) {
-    console.error('❌ 초기화 실패:', error);
+    console.error(`⚠️ 문서 ${index} 업로드 실패:`, error.message);
     throw error;
   }
 }
 
-// 🔥 File Search Store 가져오기 (없으면 생성)
+// 🔥 Supabase 전체 문서를 Google로 이전
+async function migrateAllDocuments() {
+  try {
+    console.log('🚀 기존 문서 이전 시작...');
+    
+    // 1. Store 생성
+    const storeName = await createFileSearchStore();
+    fileSearchStoreName = storeName;
+    await saveStoreName(storeName);
+    
+    // 2. Supabase에서 문서 가져오기
+    const { data: documents, error: dbError } = await supabase
+      .from('documents')
+      .select('id, content, metadata');
+
+    if (dbError) {
+      throw new Error(`DB 조회 실패: ${dbError.message}`);
+    }
+
+    console.log(`📚 총 ${documents.length}개 문서 이전 중...`);
+    
+    // 3. 각 문서 업로드
+    for (let i = 0; i < documents.length; i++) {
+      await uploadDocumentToGoogle(storeName, documents[i], i + 1);
+      
+      if ((i + 1) % 50 === 0 || i === documents.length - 1) {
+        console.log(`📤 진행률: ${i + 1}/${documents.length} (${Math.round((i + 1) / documents.length * 100)}%)`);
+      }
+      
+      // Rate limiting 방지
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    console.log('🎉 모든 문서 이전 완료!');
+    return storeName;
+    
+  } catch (error) {
+    console.error('❌ 문서 이전 실패:', error);
+    throw error;
+  }
+}
+
+// 🔥 File Search Store 가져오기
 async function getFileSearchStore() {
   if (fileSearchStoreName) {
-    console.log('📋 기존 File Search Store 사용');
     return fileSearchStoreName;
   }
-
-  console.log('🔄 File Search Store 생성 필요');
-  return await initializeFileSearchStore();
+  
+  // Supabase에서 불러오기
+  const savedName = await loadStoreName();
+  if (savedName) {
+    console.log(`✅ 저장된 Store 사용: ${savedName}`);
+    fileSearchStoreName = savedName;
+    return savedName;
+  }
+  
+  // 없으면 이전 시작
+  console.log('🔄 최초 실행: 문서 이전 시작...');
+  return await migrateAllDocuments();
 }
 
 // 상태 체크
 app.get('/', (req, res) => {
   res.json({ 
     status: 'running', 
-    message: '철산랜드 RAG 서버 (진짜 File Search API 버전)',
-    fileSearchStoreInitialized: !!fileSearchStoreName
+    message: '철산랜드 RAG 서버 (File Search API - 완전 동기화 버전)',
+    fileSearchStoreInitialized: !!fileSearchStoreName,
+    storeName: fileSearchStoreName
   });
 });
 
@@ -202,7 +295,7 @@ app.post('/api/chat', async (req, res) => {
 ${query}
 
 **답변 작성 가이드:**
-1. File Search Tool을 사용하여 관련 문서를 찾아 종합적인 답변 작성
+1. File Search Tool을 사용하여 전체 문서에서 관련 정보 검색
 2. 날짜가 더 최근인 정보 우선 사용
 3. 출처 번호 [[1]], [[2]] 반드시 표시
 4. 구조화되고 읽기 쉬운 형식으로 작성`
@@ -261,36 +354,77 @@ ${query}
   }
 });
 
-// 🔧 관리자 API - File Search Store 재생성
-app.post('/api/admin/refresh-file-search', async (req, res) => {
+// 🔧 관리자 API - Store 상태 확인
+app.get('/api/admin/store-status', async (req, res) => {
   try {
-    console.log('🔄 File Search Store 재생성 시작...');
+    const storeName = fileSearchStoreName || await loadStoreName();
     
-    // 기존 Store 삭제 (있다면)
-    if (fileSearchStoreName) {
-      await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileSearchStoreName}?force=true`, {
-        method: 'DELETE',
-        headers: {
-          'x-goog-api-key': API_KEY
-        }
+    if (!storeName) {
+      return res.json({
+        initialized: false,
+        message: '아직 File Search Store가 생성되지 않았습니다.'
       });
     }
     
-    fileSearchStoreName = null;
-    const storeName = await initializeFileSearchStore();
+    // Store 정보 가져오기
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/${storeName}`,
+      {
+        headers: {
+          'x-goog-api-key': API_KEY
+        }
+      }
+    );
     
-    res.json({ 
-      success: true, 
-      message: '✅ File Search Store가 재생성되었습니다.',
-      storeName
+    const storeInfo = await response.json();
+    
+    res.json({
+      initialized: true,
+      storeName,
+      activeDocuments: storeInfo.activeDocumentsCount || '0',
+      pendingDocuments: storeInfo.pendingDocumentsCount || '0',
+      failedDocuments: storeInfo.failedDocumentsCount || '0'
     });
   } catch (error) {
-    console.error('❌ 재생성 실패:', error);
+    console.error('❌ Store 상태 조회 실패:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ... (이전 관리자 API 코드 동일: 프롬프트, 문서 관리)
+// 🔧 관리자 API - 수동으로 문서 이전 시작
+app.post('/api/admin/migrate', async (req, res) => {
+  try {
+    console.log('🔄 수동 이전 시작...');
+    
+    // 기존 Store가 있으면 삭제
+    const oldStoreName = fileSearchStoreName || await loadStoreName();
+    if (oldStoreName) {
+      console.log('🗑️ 기존 Store 삭제 중...');
+      await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/${oldStoreName}?force=true`,
+        {
+          method: 'DELETE',
+          headers: {
+            'x-goog-api-key': API_KEY
+          }
+        }
+      );
+    }
+    
+    fileSearchStoreName = null;
+    const newStoreName = await migrateAllDocuments();
+    
+    res.json({ 
+      success: true, 
+      message: '✅ 모든 문서가 Google File Search Store로 이전되었습니다!',
+      storeName: newStoreName
+    });
+  } catch (error) {
+    console.error('❌ 이전 실패:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 관리자 API - 프롬프트 조회
 app.get('/api/admin/prompt', async (req, res) => {
   try {
@@ -391,7 +525,7 @@ app.get('/api/admin/documents', async (req, res) => {
   }
 });
 
-// 관리자 API - 문서 업로드
+// 관리자 API - 문서 업로드 (양쪽 동시 저장)
 app.post('/api/admin/upload', async (req, res) => {
   try {
     const { content, metadata } = req.body;
@@ -400,7 +534,10 @@ app.post('/api/admin/upload', async (req, res) => {
       return res.status(400).json({ error: '내용을 입력해주세요' });
     }
 
-    const { error } = await supabase
+    console.log('📤 문서 업로드 시작...');
+
+    // 1. Supabase에 저장
+    const { data: newDoc, error: dbError } = await supabase
       .from('documents')
       .insert({
         content,
@@ -408,43 +545,53 @@ app.post('/api/admin/upload', async (req, res) => {
           ...metadata,
           uploadedAt: new Date().toISOString()
         }
-      });
+      })
+      .select()
+      .single();
 
-    if (error) throw error;
+    if (dbError) throw dbError;
+    console.log('✅ Supabase 저장 완료');
 
-    // 새 문서 추가 → File Search Store 재생성 필요
-    console.log('🔄 새 문서 추가 → File Search Store 재생성 예약');
-    fileSearchStoreName = null;
+    // 2. Google File Search Store에도 업로드
+    const storeName = await getFileSearchStore();
+    const totalDocs = await supabase.from('documents').select('id', { count: 'exact', head: true });
+    
+    await uploadDocumentToGoogle(storeName, newDoc, totalDocs.count || 1);
+    console.log('✅ Google File Search Store 업로드 완료');
 
     res.json({ 
       success: true, 
-      message: '✅ 문서가 업로드되었습니다. 다음 질문부터 새 문서가 반영됩니다.' 
+      message: '✅ 문서가 양쪽 모두에 업로드되었습니다! 바로 사용 가능합니다.' 
     });
   } catch (error) {
     console.error('❌ 문서 업로드 실패:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: '문서 업로드 실패',
+      details: error.message 
+    });
   }
 });
 
-// 관리자 API - 문서 삭제
+// 관리자 API - 문서 삭제 (양쪽 동기화)
 app.delete('/api/admin/documents/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
+    // Supabase에서 삭제
     const { error } = await supabase
       .from('documents')
       .delete()
       .eq('id', id);
 
     if (error) throw error;
+    console.log('✅ Supabase 삭제 완료');
 
-    // 문서 삭제 → File Search Store 재생성 필요
-    console.log('🔄 문서 삭제 → File Search Store 재생성 예약');
-    fileSearchStoreName = null;
+    // Google File Search Store 재생성 예약
+    console.log('🔄 Google Store 재생성이 필요합니다. /api/admin/migrate를 실행하세요.');
 
     res.json({ 
       success: true, 
-      message: '✅ 문서가 삭제되었습니다. 다음 질문부터 반영됩니다.' 
+      message: '✅ 문서가 삭제되었습니다. 변경사항을 반영하려면 관리자 페이지에서 "문서 재동기화" 버튼을 클릭하세요.' 
     });
   } catch (error) {
     console.error('❌ 문서 삭제 실패:', error);
@@ -454,8 +601,21 @@ app.delete('/api/admin/documents/:id', async (req, res) => {
 
 // 서버 시작
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 서버가 포트 ${PORT}에서 실행중입니다`);
-  console.log(`🎯 Gemini 2.0 Flash + 진짜 File Search API 사용`);
-  console.log(`✨ 전체 문서 빠른 스캔 모드`);
+  console.log(`🎯 Gemini 2.0 Flash + File Search API (완전 동기화)`);
+  
+  // 서버 시작 시 Store 확인
+  try {
+    const savedStore = await loadStoreName();
+    if (savedStore) {
+      fileSearchStoreName = savedStore;
+      console.log(`✅ 기존 File Search Store 사용: ${savedStore}`);
+    } else {
+      console.log(`⚠️ File Search Store가 없습니다. 첫 질문 시 자동으로 생성됩니다.`);
+      console.log(`💡 또는 관리자 페이지에서 "문서 이전 시작" 버튼을 클릭하세요.`);
+    }
+  } catch (error) {
+    console.error('⚠️ Store 확인 실패:', error);
+  }
 });
