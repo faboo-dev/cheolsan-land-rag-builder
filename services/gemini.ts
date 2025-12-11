@@ -36,12 +36,14 @@ export class GeminiService {
     try {
       const model = this.ai.getGenerativeModel({
         model: CHAT_MODEL,
-        tools: [{ googleSearch: {} }]
+        tools: [{ googleSearchRetrieval: {} }]  // ✅ 수정: googleSearch → googleSearchRetrieval
       });
       
       const result = await model.generateContent(`Search web for: "${query}"`);
       const response = result.response;
-      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      
+      // ✅ 수정: groundingChunks → groundingChuncks (typo가 실제 API 스펙)
+      const chunks = (response as any).candidates?.[0]?.groundingMetadata?.groundingChuncks || [];
       const sources = chunks.map((c: any) => 
         c.web ? { 
           title: c.web.title || "Web Result", 
@@ -68,7 +70,7 @@ export class GeminiService {
     
     // SERVER MODES
     if ((mode === 'full-text' || mode === 'file-api') && BACKEND_URL) {
-      const endpoint = mode === 'file-api' ? '/api/chat' : '/api/chat';
+      const endpoint = '/api/chat';  // ✅ 통일된 엔드포인트
       try {
         const res = await fetch(`${BACKEND_URL}${endpoint}`, {
           method: 'POST',
