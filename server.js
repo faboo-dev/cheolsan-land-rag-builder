@@ -92,10 +92,10 @@ app.post('/api/chat', async (req, res) => {
 
     // 2. Supabase에서 전체 문서 가져오기 (날짜 순 정렬)
     console.log('📚 Supabase 전체 문서 로딩 중...');
-    const { data: documents, error: dbError } = await supabase
-      .from('documents')
-      .select('content, metadata, created_at')
-      .order('created_at', { ascending: false }); // 최신순 정렬
+  const { data: documents, error: dbError } = await supabase
+  .from('documents')
+  .select('content, metadata');
+  // created_at 제거, 정렬도 제거 (metadata.date 사용)
 
     if (dbError) {
       console.error('❌ Supabase 에러:', dbError);
@@ -287,10 +287,9 @@ app.delete('/api/admin/prompt', async (req, res) => {
 app.get('/api/admin/documents', async (req, res) => {
   try {
     const { data: documents, error } = await supabase
-      .from('documents')
-      .select('id, content, metadata, created_at')
-      .order('created_at', { ascending: false });
-
+  .from('documents')
+  .select('id, content, metadata');
+  // created_at 제거, 정렬도 제거
     if (error) throw error;
 
     res.json({ 
