@@ -3,17 +3,29 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // 프론트엔드 소스만 포함
+  root: './',
   build: {
+    outDir: 'dist',
     rollupOptions: {
-      // server.js와 백엔드 패키지를 빌드에서 제외
+      // 백엔드 파일 제외
       external: [
         'express',
         'cors',
         '@supabase/supabase-js',
         '@google/generative-ai',
         'fs',
-        'path'
-      ]
+        'path',
+        /^node:.*/
+      ],
+      // entry point 명시 (server.js 제외)
+      input: {
+        main: './index.html'
+      }
     }
+  },
+  // server.js를 모듈로 인식하지 않도록
+  optimizeDeps: {
+    exclude: ['server.js']
   }
 })
