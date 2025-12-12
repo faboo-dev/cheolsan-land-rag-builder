@@ -218,7 +218,6 @@ async function uploadDocumentsToFileSearchStore() {
       const doc = documents[idx];
       
       try {
-        // Supabase metadata에서 모든 정보 추출
         const title = doc.metadata?.title || `문서-${idx + 1}`;
         const date = doc.metadata?.date || (doc.created_at ? new Date(doc.created_at).toISOString().split('T')[0] : '날짜없음');
         const type = doc.metadata?.type || 'BLOG';
@@ -230,7 +229,6 @@ async function uploadDocumentsToFileSearchStore() {
         
         console.log(`⏳ [${idx + 1}/${documents.length}] 업로드 중: ${fileName}...`);
 
-        // 모든 메타데이터 포함
         const fileContent = `제목: ${title}
 날짜: ${date}
 타입: ${type}
@@ -240,12 +238,10 @@ ChunkIndex: ${chunkIndex}
 
 ${doc.content}`;
 
-        // Blob 생성
         const blob = new Blob([fileContent], { type: 'text/plain' });
         const formData = new FormData();
         formData.append('file', blob, `${fileName}.txt`);
 
-        // 재시도 로직
         let uploadSuccess = false;
         let retryCount = 0;
         
@@ -291,7 +287,6 @@ ${doc.content}`;
           console.error(`❌ [${idx + 1}] 최종 실패: ${fileName}`);
         }
 
-        // Rate Limit 방지
         if ((idx + 1) % 3 === 0) {
           console.log(`⏸️ 진행률: ${idx + 1}/${documents.length} - 15초 대기...`);
           await delay(15000);
@@ -299,7 +294,6 @@ ${doc.content}`;
           await delay(2000);
         }
 
-        // 50개마다 중간 저장
         if ((idx + 1) % 50 === 0) {
           console.log(`💾 중간 저장: ${successCount}개 업로드 완료`);
           await saveUploadedCount(successCount);
@@ -379,7 +373,7 @@ app.post('/api/chat', async (req, res) => {
   console.log('🔵 /api/chat 요청 받음');
 
   try {
-    const { query, systemInstruction, useWebSearch } = req.body;
+    const { query, systemInstruction } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: '질문을 입력해주세요' });
@@ -397,23 +391,41 @@ app.post('/api/chat', async (req, res) => {
     const customPrompt = await getSystemPrompt();
     const finalPrompt = systemInstruction || customPrompt;
 
-    console.log('🤖 Gemini 1.5 Flash 호출 중 (File Search API 모드)...');
+    console.log('🤖 Gemini 1.5 Flash 호출 중 (File Search 모드)...');
 
-    // File Search API 지원 모델 사용
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+    // REST API로 직접 호출
+    const requestBody = {
+      contents: [{
+        parts: [{
+          text: `${finalPrompt}\n\n**사용자 질문:**\n${query}`
+        }]
+      }],
       tools: [{
-        fileSearchTool: {
-          fileSearchStore: fileSearchStoreName
+        google_search_retrieval: {
+          dynamic_retrieval_config: {
+            mode: "MODE_DYNAMIC",
+            dynamic_threshold: 0.7
+          }
         }
       }]
-    });
+    };
 
-    const result = await model.generateContent([
-      { text: `${finalPrompt}\n\n**사용자 질문:**\n${query}` }
-    ]);
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      }
+    );
 
-    const answer = result.response.text();
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(JSON.stringify(errorData));
+    }
+
+    const data = await response.json();
+    const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response';
 
     console.log('✅ Gemini 응답 받음');
 
@@ -454,24 +466,22 @@ app.post('/api/admin/reset-store', async (req, res) => {
   }
 });
 
-// 관리자 API - 파일 재업로드 (주의: Render 무료 플랜에서는 타임아웃 가능)
+// 관리자 API - 파일 재업로드
 app.post('/api/admin/refresh-files', async (req, res) => {
   try {
     console.log('🔄 파일 강제 재업로드...');
     fileSearchStoreName = null;
     uploadedFilesCount = 0;
     
-    // Store 생성
     await createFileSearchStore();
     
-    // 업로드 시작 (백그라운드)
     uploadDocumentsToFileSearchStore().catch(err => {
       console.error('⚠️ 백그라운드 업로드 실패:', err.message);
     });
     
     res.json({ 
       success: true, 
-      message: '업로드가 백그라운드에서 시작되었습니다. 완료까지 시간이 걸릴 수 있습니다.',
+      message: '업로드가 백그라운드에서 시작되었습니다.',
       storeName: fileSearchStoreName
     });
   } catch (error) {
@@ -556,10 +566,9 @@ const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   console.log(`🚀 서버가 포트 ${PORT}에서 실행중입니다`);
-  console.log(`🔍 File Search API 사용 (gemini-1.5-flash)`);
+  console.log(`🔍 Gemini 1.5 Flash (Google Search Retrieval)`);
   
-  // Store 정보만 로드 (자동 업로드 제거됨)
   initializeFileSearchStore().catch(err => {
-    console.error('⚠️ 초기화 실패 (서버는 계속 실행):', err.message);
+    console.error('⚠️ 초기화 실패:', err.message);
   });
 });
