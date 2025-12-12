@@ -168,7 +168,30 @@ async function createFileSearchStore() {
   }
 }
 
-// ==================== 문서 업로드 ====================
+// ==================== 초기화 (업로드 제거됨) ====================
+
+async function initializeFileSearchStore() {
+  try {
+    console.log('🔵 File Search Store 정보 로드 중...');
+    
+    await loadStoreName();
+    await loadUploadedCount();
+
+    if (!fileSearchStoreName) {
+      console.log('⚠️ Store가 없습니다. 로컬 스크립트로 업로드해주세요.');
+      console.log('📝 또는 /api/admin/refresh-files API를 호출하세요.');
+    } else {
+      console.log('✅ File Search Store 사용 준비 완료');
+      console.log(`📊 Store: ${fileSearchStoreName}`);
+      console.log(`📄 문서 수: ${uploadedFilesCount}개`);
+    }
+
+  } catch (error) {
+    console.error('❌ 초기화 오류:', error);
+  }
+}
+
+// ==================== 문서 업로드 (관리자 API용) ====================
 
 async function uploadDocumentsToFileSearchStore() {
   try {
@@ -240,8 +263,8 @@ ${doc.content}`;
               const errorData = await uploadResponse.json();
               
               if (errorData.error?.status === 'RESOURCE_EXHAUSTED' || uploadResponse.status === 429) {
-                console.log(`⚠️ Rate Limit - ${retryCount + 1}번째 재시도 전 180초 대기...`);
-                await delay(180000);
+                console.log(`⚠️ Rate Limit - ${retryCount + 1}번째 재시도 전 60초 대기...`);
+                await delay(60000);
                 retryCount++;
                 continue;
               }
@@ -299,36 +322,6 @@ ${doc.content}`;
   } catch (error) {
     console.error('❌ 업로드 오류:', error);
     throw error;
-  }
-}
-
-// ==================== 초기화 ====================
-
-async function initializeFileSearchStore() {
-  try {
-    console.log('🔵 File Search Store 초기화...');
-    
-    await loadStoreName();
-    await loadUploadedCount();
-
-    const { count, error } = await supabase
-      .from('documents')
-      .select('*', { count: 'exact', head: true });
-
-    if (error) throw error;
-
-    console.log(`📊 Supabase 문서: ${count}개, 업로드된 파일: ${uploadedFilesCount}개`);
-
-    // Store가 없거나 문서 개수 변경 시 재업로드
-    if (!fileSearchStoreName || uploadedFilesCount !== count) {
-      console.log('🔄 문서 업로드 필요...');
-      await uploadDocumentsToFileSearchStore();
-    } else {
-      console.log('✅ File Search Store 이미 초기화됨');
-    }
-
-  } catch (error) {
-    console.error('❌ 초기화 오류:', error);
   }
 }
 
@@ -395,8 +388,9 @@ app.post('/api/chat', async (req, res) => {
     console.log('📥 질문:', query);
 
     if (!fileSearchStoreName) {
-      console.log('⚠️ File Search Store 없음 - 초기화 시작');
-      await initializeFileSearchStore();
+      return res.status(500).json({ 
+        error: 'File Search Store가 초기화되지 않았습니다. 관리자에게 문의하세요.' 
+      });
     }
 
     // 프롬프트
@@ -454,20 +448,32 @@ app.post('/api/admin/reset-store', async (req, res) => {
   try {
     console.log('🔄 Store 초기화 시작...');
     await deleteFileSearchStore();
-    res.json({ success: true, message: 'Store 삭제 완료. 서버를 재시작하세요.' });
+    res.json({ success: true, message: 'Store 삭제 완료. 로컬 스크립트로 재업로드하세요.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 관리자 API - 파일 재업로드
+// 관리자 API - 파일 재업로드 (주의: Render 무료 플랜에서는 타임아웃 가능)
 app.post('/api/admin/refresh-files', async (req, res) => {
   try {
     console.log('🔄 파일 강제 재업로드...');
     fileSearchStoreName = null;
     uploadedFilesCount = 0;
-    await initializeFileSearchStore();
-    res.json({ success: true, filesCount: uploadedFilesCount });
+    
+    // Store 생성
+    await createFileSearchStore();
+    
+    // 업로드 시작 (백그라운드)
+    uploadDocumentsToFileSearchStore().catch(err => {
+      console.error('⚠️ 백그라운드 업로드 실패:', err.message);
+    });
+    
+    res.json({ 
+      success: true, 
+      message: '업로드가 백그라운드에서 시작되었습니다. 완료까지 시간이 걸릴 수 있습니다.',
+      storeName: fileSearchStoreName
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -552,7 +558,7 @@ app.listen(PORT, async () => {
   console.log(`🚀 서버가 포트 ${PORT}에서 실행중입니다`);
   console.log(`🔍 File Search API 사용 (gemini-1.5-flash)`);
   
-  // 비동기 초기화
+  // Store 정보만 로드 (자동 업로드 제거됨)
   initializeFileSearchStore().catch(err => {
     console.error('⚠️ 초기화 실패 (서버는 계속 실행):', err.message);
   });
