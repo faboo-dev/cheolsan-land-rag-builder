@@ -364,44 +364,50 @@ app.post('/api/chat', async (req, res) => {
   console.log('🔵 /api/chat 요청 받음');
 
   try {
-    const { query, systemInstruction } = req.body;
+    const { query, systemInstruction, useWebSearch } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: '질문을 입력해주세요' });
     }
 
     console.log('📥 질문:', query);
+    console.log('🌐 웹검색 사용:', useWebSearch ? 'Yes' : 'No');
 
-    if (!fileSearchStoreName) {
-      return res.status(500).json({ 
-        error: 'File Search Store가 초기화되지 않았습니다. 관리자에게 문의하세요.' 
-      });
+    // Tool 선택
+    let tools;
+    if (useWebSearch) {
+      tools = [{ google_search_retrieval: {} }];
+      console.log('🔍 Tool: Google Search');
+    } else {
+      if (!fileSearchStoreName) {
+        return res.status(500).json({ 
+          error: 'File Search Store가 초기화되지 않았습니다.' 
+        });
+      }
+      tools = [{ 
+        file_search: { 
+          file_search_store_names: [fileSearchStoreName] 
+        } 
+      }];
+      console.log('📚 Tool: File Search Store');
     }
 
     // 프롬프트
     const customPrompt = await getSystemPrompt();
     const finalPrompt = systemInstruction || customPrompt;
 
-    console.log('🤖 Gemini 2.5 Flash 호출 중 (File Search 모드)...');
+    console.log('🤖 Gemini 2.5 Flash 호출 중...');
     console.log('📝 프롬프트 길이:', finalPrompt.length, '자');
+    console.log('🔢 예상 토큰:', Math.ceil(finalPrompt.length / 4), '토큰');
 
-    // 개선된 REST API 호출 (system_instruction 분리)
     const requestBody = {
       system_instruction: {
-        parts: [{
-          text: finalPrompt
-        }]
+        parts: [{ text: finalPrompt }]
       },
       contents: [{
-        parts: [{
-          text: query
-        }]
+        parts: [{ text: query }]
       }],
-      tools: [{
-        file_search: {
-          file_search_store_names: [fileSearchStoreName]
-        }
-      }]
+      tools: tools
     };
 
     const response = await fetch(
@@ -422,40 +428,74 @@ app.post('/api/chat', async (req, res) => {
     const data = await response.json();
     
     console.log('✅ Gemini 응답 받음');
-    console.log('📊 응답 구조:', JSON.stringify(data, null, 2).substring(0, 500));
     
-    // 응답 파싱
+    // ⭐ 여기가 핵심! 전체 응답 구조를 로그로 출력
+    console.log('📊 전체 응답 구조:');
+    console.log(JSON.stringify(data, null, 2));
+    
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '응답을 생성할 수 없습니다.';
     
-    // Grounding 메타데이터에서 출처 추출
+    console.log('📝 답변 길이:', answer.length, '자');
+    
+    // Grounding Metadata 추출
     const groundingMetadata = data.candidates?.[0]?.groundingMetadata;
+    
+    console.log('🔍 groundingMetadata 존재 여부:', !!groundingMetadata);
+    
+    if (groundingMetadata) {
+      console.log('📚 groundingMetadata 전체:');
+      console.log(JSON.stringify(groundingMetadata, null, 2));
+    }
+    
     let sources = [];
     
     if (groundingMetadata?.groundingChunks) {
-      sources = groundingMetadata.groundingChunks.map((chunk, idx) => ({
-        id: idx + 1,
-        title: chunk.web?.title || `문서 ${idx + 1}`,
-        content: chunk.web?.uri || '',
-        date: new Date().toISOString().split('T')[0]
-      }));
+      console.log('📦 groundingChunks 개수:', groundingMetadata.groundingChunks.length);
       
-      console.log('📚 출처 개수:', sources.length);
+      sources = groundingMetadata.groundingChunks.map((chunk, idx) => {
+        console.log(`\n🔗 Chunk ${idx + 1}:`, JSON.stringify(chunk, null, 2));
+        
+        // 여러 가능성 체크
+        const context = chunk.retrievedContext || chunk.web || {};
+        
+        return {
+          id: idx + 1,
+          title: context.title || chunk.title || `문서 ${idx + 1}`,
+          url: context.uri || chunk.uri || '',
+          content: (context.text || chunk.text || '').substring(0, 200),
+          date: new Date().toISOString().split('T')[0]
+        };
+      });
+      
+      console.log('✅ 출처 추출 완료:', sources.length, '개');
+      sources.forEach((src, idx) => {
+        console.log(`  ${idx + 1}. ${src.title}`);
+        console.log(`     URL: ${src.url || '(없음)'}`);
+      });
+    } else {
+      console.log('⚠️ groundingChunks 없음');
     }
     
-    // 출처가 없으면 기본 정보
     if (sources.length === 0) {
+      console.log('📝 기본 출처 생성');
       sources = [{
         id: 1,
-        title: 'File Search Store',
-        content: `총 ${uploadedFilesCount}개의 문서에서 검색되었습니다.`,
+        title: useWebSearch ? 'Web Search' : 'File Search Store',
+        content: useWebSearch 
+          ? '웹 검색 결과를 기반으로 답변했습니다.' 
+          : `총 ${uploadedFilesCount}개의 문서에서 검색되었습니다.`,
+        url: '',
         date: new Date().toISOString().split('T')[0]
       }];
     }
 
+    console.log('🎉 응답 전송 준비 완료');
+
     res.json({
       answer,
       sources,
-      usingFileSearchAPI: true,
+      usingFileSearchAPI: !useWebSearch,
+      usingWebSearch: useWebSearch,
       totalDocuments: uploadedFilesCount
     });
 
@@ -467,6 +507,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 });
+
 
 
 // 관리자 API - 프롬프트
