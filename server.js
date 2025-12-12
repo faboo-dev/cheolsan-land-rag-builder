@@ -273,16 +273,6 @@ async function getSystemPrompt() {
 
 // ==================== API 엔드포인트 ====================
 
-app.get('/', (req, res) => {
-  res.json({
-    status: 'running',
-    message: '철산랜드 RAG 서버 (File Search API)',
-    fileSearchStoreInitialized: !!fileSearchStoreName,
-    storeName: fileSearchStoreName,
-    uploadedFilesCount: uploadedFilesCount
-  });
-});
-
 app.post('/api/chat', async (req, res) => {
   console.log('🔵 /api/chat 요청 받음');
 
@@ -319,19 +309,21 @@ app.post('/api/chat', async (req, res) => {
     const customPrompt = await getSystemPrompt();
     const finalPrompt = systemInstruction || customPrompt;
 
-    console.log('🤖 Gemini 2.5 Flash 호출 중 (File Search 모드)...');
+    console.log('🤖 Gemini 2.5 Flash 호출 중...');
     console.log('📝 프롬프트 길이:', finalPrompt.length, '자');
     console.log('🔢 예상 토큰:', Math.ceil(finalPrompt.length / 4), '토큰');
 
+    // ⭐ 핵심 수정: File Search 사용 시 프롬프트를 contents에 포함!
     const requestBody = {
-      system_instruction: {
-        parts: [{ text: finalPrompt }]
-      },
       contents: [{
-        parts: [{ text: query }]
+        parts: [{ 
+          text: `${finalPrompt}\n\n---\n\n**사용자 질문:**\n${query}` 
+        }]
       }],
       tools: tools
     };
+
+    console.log('📤 요청 전송 중...');
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
@@ -351,22 +343,16 @@ app.post('/api/chat', async (req, res) => {
     const data = await response.json();
     
     console.log('✅ Gemini 응답 받음');
-    console.log('📊 전체 응답 구조:');
-    console.log(JSON.stringify(data, null, 2));
     
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '응답을 생성할 수 없습니다.';
     
     console.log('📝 답변 길이:', answer.length, '자');
+    console.log('📝 답변 미리보기:', answer.substring(0, 200));
     
-    // ⭐ Grounding Metadata 추출
+    // Grounding Metadata 추출
     const groundingMetadata = data.candidates?.[0]?.groundingMetadata;
     
     console.log('🔍 groundingMetadata 존재 여부:', !!groundingMetadata);
-    
-    if (groundingMetadata) {
-      console.log('📚 groundingMetadata 전체:');
-      console.log(JSON.stringify(groundingMetadata, null, 2));
-    }
     
     let sources = [];
     
@@ -374,11 +360,9 @@ app.post('/api/chat', async (req, res) => {
       console.log('📦 groundingChunks 개수:', groundingMetadata.groundingChunks.length);
       
       sources = groundingMetadata.groundingChunks.map((chunk, idx) => {
-        console.log(`\n🔗 Chunk ${idx + 1}:`, JSON.stringify(chunk, null, 2));
-        
         const context = chunk.retrievedContext || chunk.web || {};
         
-        // ⭐ text에서 URL 추출하기
+        // text에서 URL 추출하기
         let url = '';
         let title = context.title || `문서 ${idx + 1}`;
         let type = '';
@@ -420,16 +404,13 @@ app.post('/api/chat', async (req, res) => {
         console.log(`     URL: ${src.url || '(없음)'}`);
       });
       
-      // ⭐ 중복 URL 제거
+      // 중복 URL 제거
       const uniqueSources = [];
       const seenUrls = new Set();
       
       for (const source of sources) {
         if (source.url && !seenUrls.has(source.url)) {
           seenUrls.add(source.url);
-          uniqueSources.push(source);
-        } else if (!source.url) {
-          // URL이 없는 경우도 포함 (디버깅용)
           uniqueSources.push(source);
         }
       }
@@ -473,6 +454,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 });
+
 
 // 관리자 API - 프롬프트
 app.get('/api/admin/prompt', async (req, res) => {
