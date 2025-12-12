@@ -360,16 +360,6 @@ async function getSystemPrompt() {
 
 // ==================== API 엔드포인트 ====================
 
-app.get('/', (req, res) => {
-  res.json({
-    status: 'running',
-    message: '철산랜드 RAG 서버 (File Search API)',
-    fileSearchStoreInitialized: !!fileSearchStoreName,
-    storeName: fileSearchStoreName,
-    uploadedFilesCount: uploadedFilesCount
-  });
-});
-
 app.post('/api/chat', async (req, res) => {
   console.log('🔵 /api/chat 요청 받음');
 
@@ -393,9 +383,9 @@ app.post('/api/chat', async (req, res) => {
     const finalPrompt = systemInstruction || customPrompt;
 
     console.log('🤖 Gemini 2.5 Flash 호출 중 (File Search 모드)...');
+    console.log('📝 프롬프트 길이:', finalPrompt.length, '자');
 
-    // 공식 문서 기반 REST API 호출
-       // 개선된 REST API 호출 (system_instruction 분리)
+    // 개선된 REST API 호출 (system_instruction 분리)
     const requestBody = {
       system_instruction: {
         parts: [{
@@ -413,7 +403,7 @@ app.post('/api/chat', async (req, res) => {
         }
       }]
     };
-    
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
       {
@@ -432,6 +422,7 @@ app.post('/api/chat', async (req, res) => {
     const data = await response.json();
     
     console.log('✅ Gemini 응답 받음');
+    console.log('📊 응답 구조:', JSON.stringify(data, null, 2).substring(0, 500));
     
     // 응답 파싱
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '응답을 생성할 수 없습니다.';
@@ -447,6 +438,8 @@ app.post('/api/chat', async (req, res) => {
         content: chunk.web?.uri || '',
         date: new Date().toISOString().split('T')[0]
       }));
+      
+      console.log('📚 출처 개수:', sources.length);
     }
     
     // 출처가 없으면 기본 정보
@@ -474,6 +467,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 });
+
 
 // 관리자 API - 프롬프트
 app.get('/api/admin/prompt', async (req, res) => {
