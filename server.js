@@ -97,7 +97,44 @@ async function saveUploadedCount(count) {
   }
 }
 
-// File Search Store 생성
+// ==================== Store 삭제 ====================
+
+async function deleteFileSearchStore() {
+  try {
+    if (!fileSearchStoreName) {
+      console.log('⚠️ 삭제할 Store가 없음');
+      return;
+    }
+
+    console.log('🗑️ File Search Store 삭제 중:', fileSearchStoreName);
+    
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/${fileSearchStoreName}?key=${API_KEY}`,
+      {
+        method: 'DELETE'
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Store 삭제 실패:', errorData);
+    } else {
+      console.log('✅ File Search Store 삭제 완료');
+      fileSearchStoreName = null;
+      uploadedFilesCount = 0;
+      
+      // Supabase에서도 삭제
+      await supabase.from('settings').delete().eq('key', 'file_search_store_name');
+      await supabase.from('settings').delete().eq('key', 'uploaded_files_count');
+    }
+
+  } catch (error) {
+    console.error('❌ Store 삭제 오류:', error);
+  }
+}
+
+// ==================== Store 생성 ====================
+
 async function createFileSearchStore() {
   try {
     console.log('🔵 File Search Store 생성 중...');
@@ -131,7 +168,8 @@ async function createFileSearchStore() {
   }
 }
 
-// 문서를 File Search Store에 업로드
+// ==================== 문서 업로드 ====================
+
 async function uploadDocumentsToFileSearchStore() {
   try {
     console.log('📚 Supabase 문서 로딩 중...');
@@ -152,23 +190,30 @@ async function uploadDocumentsToFileSearchStore() {
     let successCount = 0;
     let failCount = 0;
 
-    // 순차 업로드 (Rate Limit 방지)
+    // 순차 업로드
     for (let idx = 0; idx < documents.length; idx++) {
       const doc = documents[idx];
       
       try {
+        // Supabase metadata에서 모든 정보 추출
         const title = doc.metadata?.title || `문서-${idx + 1}`;
-        const date = doc.created_at ? new Date(doc.created_at).toISOString().split('T')[0] : '날짜없음';
-        const source = doc.metadata?.source || '출처없음';
+        const date = doc.metadata?.date || (doc.created_at ? new Date(doc.created_at).toISOString().split('T')[0] : '날짜없음');
+        const type = doc.metadata?.type || 'BLOG';
+        const url = doc.metadata?.url || '';
+        const sourceId = doc.metadata?.sourceId || '';
+        const chunkIndex = doc.metadata?.chunkIndex || 0;
         
         const fileName = `[${date}] ${title}`.substring(0, 100);
         
         console.log(`⏳ [${idx + 1}/${documents.length}] 업로드 중: ${fileName}...`);
 
-        // 텍스트 파일 내용 생성
+        // 모든 메타데이터 포함
         const fileContent = `제목: ${title}
 날짜: ${date}
-출처: ${source}
+타입: ${type}
+URL: ${url}
+SourceID: ${sourceId}
+ChunkIndex: ${chunkIndex}
 
 ${doc.content}`;
 
@@ -177,54 +222,76 @@ ${doc.content}`;
         const formData = new FormData();
         formData.append('file', blob, `${fileName}.txt`);
 
-        // REST API로 업로드
-        const uploadResponse = await fetch(
-          `https://generativelanguage.googleapis.com/upload/v1beta/${fileSearchStoreName}:uploadToFileSearchStore?key=${API_KEY}`,
-          {
-            method: 'POST',
-            body: formData
-          }
-        );
+        // 재시도 로직
+        let uploadSuccess = false;
+        let retryCount = 0;
+        
+        while (!uploadSuccess && retryCount < 3) {
+          try {
+            const uploadResponse = await fetch(
+              `https://generativelanguage.googleapis.com/upload/v1beta/${fileSearchStoreName}:uploadToFileSearchStore?key=${API_KEY}`,
+              {
+                method: 'POST',
+                body: formData
+              }
+            );
 
-        if (!uploadResponse.ok) {
-          const errorData = await uploadResponse.json();
-          console.error(`⚠️ [${idx + 1}] 업로드 실패:`, errorData);
-          failCount++;
-          
-          // Rate Limit 오류 처리
-          if (errorData.error?.status === 'RESOURCE_EXHAUSTED' || uploadResponse.status === 429) {
-            console.log('⚠️ Rate Limit 감지 - 60초 대기...');
-            await delay(60000);
+            if (!uploadResponse.ok) {
+              const errorData = await uploadResponse.json();
+              
+              if (errorData.error?.status === 'RESOURCE_EXHAUSTED' || uploadResponse.status === 429) {
+                console.log(`⚠️ Rate Limit - ${retryCount + 1}번째 재시도 전 180초 대기...`);
+                await delay(180000);
+                retryCount++;
+                continue;
+              }
+              
+              console.error(`❌ [${idx + 1}] 업로드 실패:`, errorData);
+              throw new Error(JSON.stringify(errorData));
+            }
+
+            uploadSuccess = true;
+            successCount++;
+            console.log(`✅ [${idx + 1}/${documents.length}] 업로드 완료: ${fileName}`);
+
+          } catch (fetchError) {
+            console.error(`⚠️ [${idx + 1}] Fetch 오류 (재시도 ${retryCount + 1}/3):`, fetchError.message);
+            retryCount++;
+            if (retryCount < 3) {
+              await delay(30000);
+            }
           }
-          continue;
         }
 
-        successCount++;
-        console.log(`✅ [${idx + 1}/${documents.length}] 업로드 완료: ${fileName}`);
+        if (!uploadSuccess) {
+          failCount++;
+          console.error(`❌ [${idx + 1}] 최종 실패: ${fileName}`);
+        }
 
         // Rate Limit 방지
-        if ((idx + 1) % 10 === 0) {
-          console.log(`⏸️ 진행률: ${idx + 1}/${documents.length} - 3초 대기...`);
-          await delay(3000);
+        if ((idx + 1) % 3 === 0) {
+          console.log(`⏸️ 진행률: ${idx + 1}/${documents.length} - 15초 대기...`);
+          await delay(15000);
         } else {
-          await delay(500);
+          await delay(2000);
+        }
+
+        // 50개마다 중간 저장
+        if ((idx + 1) % 50 === 0) {
+          console.log(`💾 중간 저장: ${successCount}개 업로드 완료`);
+          await saveUploadedCount(successCount);
         }
 
       } catch (error) {
         failCount++;
         console.error(`❌ [${idx + 1}] 오류:`, error.message);
-        
-        if (error.message.includes('429') || error.message.includes('quota')) {
-          console.log('⚠️ Rate Limit - 30초 대기...');
-          await delay(30000);
-        }
+        await delay(5000);
       }
     }
 
     uploadedFilesCount = successCount;
     console.log(`🎉 업로드 완료: ${successCount}개 성공, ${failCount}개 실패`);
     
-    // 업로드 카운트 저장
     await saveUploadedCount(successCount);
 
     return successCount;
@@ -235,7 +302,8 @@ ${doc.content}`;
   }
 }
 
-// 초기화
+// ==================== 초기화 ====================
+
 async function initializeFileSearchStore() {
   try {
     console.log('🔵 File Search Store 초기화...');
@@ -264,7 +332,7 @@ async function initializeFileSearchStore() {
   }
 }
 
-// ==================== Supabase 프롬프트 ====================
+// ==================== 프롬프트 ====================
 
 async function getSystemPrompt() {
   try {
@@ -285,17 +353,21 @@ async function getSystemPrompt() {
   return `당신은 철산랜드의 전문 여행 컨설턴트 AI입니다.
 
 **역할:**
-- 세부/보홀 여행 전문가로서 정확하고 실용적인 정보를 제공합니다
-- Google File Search API를 통해 563개의 여행 문서를 검색하여 답변합니다
+- 전 세계 여행지에 대한 정확하고 실용적인 정보를 제공합니다
+- Google File Search API를 통해 여행 문서 데이터베이스를 검색하여 답변합니다
+- 유튜브 영상과 블로그 글을 기반으로 상세한 여행 정보를 제공합니다
 
 **답변 규칙:**
 1. 📌 **출처 표시 필수**: 정보를 언급할 때 반드시 [[1]], [[2]] 형식으로 출처 번호를 표시하세요
 2. 📅 **최신 정보 우선**: 날짜가 표시된 문서 중 가장 최근 정보를 우선하세요
 3. 🎯 **구체적 답변**: 가격, 위치, 시간, 연락처 등 구체적 정보를 포함하세요
-4. ⚠️ **정보 없음 명시**: 문서에 없는 내용은 "제공된 자료에 해당 내용이 없습니다"라고 명시하세요
-5. 📝 **마크다운 사용**: 제목, 목록, 강조를 활용하여 읽기 쉽게 작성하세요
-6. 🔗 **관련 정보 추가**: 질문과 관련된 다른 유용한 정보도 함께 제공하세요
-7. 💡 **실용적 팁**: 여행자가 실제로 도움받을 수 있는 팁을 추가하세요`;
+4. 🔗 **원본 링크 제공**: 
+   - YouTube 영상의 경우: URL과 타임스탬프 함께 제공
+   - 블로그 글의 경우: URL 제공
+5. ⚠️ **정보 없음 명시**: 문서에 없는 내용은 "제공된 자료에 해당 내용이 없습니다"라고 명시하세요
+6. 📝 **마크다운 사용**: 제목, 목록, 강조를 활용하여 읽기 쉽게 작성하세요
+7. 💡 **실용적 팁**: 여행자가 실제로 도움받을 수 있는 팁을 추가하세요
+8. 🌍 **지역 정보**: 답변 시 어느 지역/국가에 대한 정보인지 명확히 표시하세요`;
 }
 
 // ==================== API 엔드포인트 ====================
@@ -374,6 +446,17 @@ app.post('/api/chat', async (req, res) => {
       error: 'AI 답변 생성에 실패했습니다.',
       details: error.message
     });
+  }
+});
+
+// 관리자 API - Store 초기화 (삭제)
+app.post('/api/admin/reset-store', async (req, res) => {
+  try {
+    console.log('🔄 Store 초기화 시작...');
+    await deleteFileSearchStore();
+    res.json({ success: true, message: 'Store 삭제 완료. 서버를 재시작하세요.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
