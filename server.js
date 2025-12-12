@@ -22,7 +22,7 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 let fileSearchStoreName = null;
 let uploadedFilesCount = 0;
 
-// ==================== File Search Store 관리 (REST API) ====================
+// ==================== 유틸리티 함수 ====================
 
 // 지연 함수
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -60,6 +60,40 @@ async function saveStoreName(storeName) {
     console.log('✅ Store 이름 저장:', storeName);
   } catch (error) {
     console.error('⚠️ Store 이름 저장 실패:', error.message);
+  }
+}
+
+// 업로드 카운트 로드
+async function loadUploadedCount() {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'uploaded_files_count')
+      .single();
+
+    if (!error && data) {
+      uploadedFilesCount = parseInt(data.value) || 0;
+      console.log('✅ 업로드 카운트 로드:', uploadedFilesCount);
+    }
+  } catch (error) {
+    console.log('⚠️ 업로드 카운트 로드 실패');
+  }
+}
+
+// 업로드 카운트 저장
+async function saveUploadedCount(count) {
+  try {
+    await supabase
+      .from('settings')
+      .upsert({
+        key: 'uploaded_files_count',
+        value: String(count),
+        updated_at: new Date().toISOString()
+      });
+    console.log('✅ 업로드 카운트 저장:', count);
+  } catch (error) {
+    console.error('⚠️ 업로드 카운트 저장 실패:', error.message);
   }
 }
 
@@ -142,10 +176,6 @@ ${doc.content}`;
         const blob = new Blob([fileContent], { type: 'text/plain' });
         const formData = new FormData();
         formData.append('file', blob, `${fileName}.txt`);
-        formData.append('metadata', JSON.stringify({
-          displayName: fileName,
-          mimeType: 'text/plain'
-        }));
 
         // REST API로 업로드
         const uploadResponse = await fetch(
@@ -195,13 +225,7 @@ ${doc.content}`;
     console.log(`🎉 업로드 완료: ${successCount}개 성공, ${failCount}개 실패`);
     
     // 업로드 카운트 저장
-    await supabase
-      .from('settings')
-      .upsert({
-        key: 'uploaded_files_count',
-        value: String(successCount),
-        updated_at: new Date().toISOString()
-      });
+    await saveUploadedCount(successCount);
 
     return successCount;
 
@@ -217,6 +241,7 @@ async function initializeFileSearchStore() {
     console.log('🔵 File Search Store 초기화...');
     
     await loadStoreName();
+    await loadUploadedCount();
 
     const { count, error } = await supabase
       .from('documents')
@@ -224,7 +249,7 @@ async function initializeFileSearchStore() {
 
     if (error) throw error;
 
-    console.log(`📊 Supabase 문서: ${count}개`);
+    console.log(`📊 Supabase 문서: ${count}개, 업로드된 파일: ${uploadedFilesCount}개`);
 
     // Store가 없거나 문서 개수 변경 시 재업로드
     if (!fileSearchStoreName || uploadedFilesCount !== count) {
@@ -306,11 +331,11 @@ app.post('/api/chat', async (req, res) => {
     const customPrompt = await getSystemPrompt();
     const finalPrompt = systemInstruction || customPrompt;
 
-    console.log('🤖 Gemini 호출 중 (File Search API 모드)...');
+    console.log('🤖 Gemini 1.5 Flash 호출 중 (File Search API 모드)...');
 
-    // Gemini 2.0 Flash with File Search Tool
+    // File Search API 지원 모델 사용
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-1.5-flash',
       tools: [{
         fileSearchTool: {
           fileSearchStore: fileSearchStoreName
@@ -326,19 +351,21 @@ app.post('/api/chat', async (req, res) => {
 
     console.log('✅ Gemini 응답 받음');
 
-    // 출처 정보 (File Search에서 자동 생성)
+    // 출처 정보
     const sources = [
       {
         id: 1,
         title: 'File Search Store',
-        content: `총 ${uploadedFilesCount}개의 문서에서 검색되었습니다.`
+        content: `총 ${uploadedFilesCount}개의 문서에서 검색되었습니다.`,
+        date: new Date().toISOString().split('T')[0]
       }
     ];
 
     res.json({
       answer,
       sources,
-      usingFileSearchAPI: true
+      usingFileSearchAPI: true,
+      totalDocuments: uploadedFilesCount
     });
 
   } catch (error) {
@@ -355,6 +382,7 @@ app.post('/api/admin/refresh-files', async (req, res) => {
   try {
     console.log('🔄 파일 강제 재업로드...');
     fileSearchStoreName = null;
+    uploadedFilesCount = 0;
     await initializeFileSearchStore();
     res.json({ success: true, filesCount: uploadedFilesCount });
   } catch (error) {
@@ -439,7 +467,7 @@ const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   console.log(`🚀 서버가 포트 ${PORT}에서 실행중입니다`);
-  console.log(`🔍 File Search API 사용`);
+  console.log(`🔍 File Search API 사용 (gemini-1.5-flash)`);
   
   // 비동기 초기화
   initializeFileSearchStore().catch(err => {
