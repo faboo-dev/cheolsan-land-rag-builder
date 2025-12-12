@@ -284,13 +284,11 @@ app.post('/api/chat', async (req, res) => {
     }
 
     console.log('📥 질문:', query);
-    console.log('🌐 웹검색 사용:', useWebSearch ? 'Yes' : 'No');
 
     // Tool 선택
     let tools;
     if (useWebSearch) {
       tools = [{ google_search_retrieval: {} }];
-      console.log('🔍 Tool: Google Search');
     } else {
       if (!fileSearchStoreName) {
         return res.status(500).json({ 
@@ -302,28 +300,39 @@ app.post('/api/chat', async (req, res) => {
           file_search_store_names: [fileSearchStoreName] 
         } 
       }];
-      console.log('📚 Tool: File Search Store');
     }
 
-    // 프롬프트
+    // 프롬프트 가져오기
     const customPrompt = await getSystemPrompt();
     const finalPrompt = systemInstruction || customPrompt;
 
     console.log('🤖 Gemini 2.5 Flash 호출 중...');
     console.log('📝 프롬프트 길이:', finalPrompt.length, '자');
-    console.log('🔢 예상 토큰:', Math.ceil(finalPrompt.length / 4), '토큰');
 
-    // ⭐ 핵심 수정: File Search 사용 시 프롬프트를 contents에 포함!
+    // ⭐ 핵심: 프롬프트를 쿼리 안에 명시적으로 포함!
+    const combinedPrompt = `${finalPrompt}
+
+---
+
+**[사용자 질문]**
+${query}
+
+---
+
+**[응답 작성 시 반드시 준수할 규칙]**
+1. 위의 페르소나와 톤을 정확히 따를 것
+2. 각 정보 블록 끝에 [제목](URL) 형식으로 출처 표시할 것
+3. 마지막에 "📚 출처 리스트" 박스를 만들어 모든 출처 링크를 나열할 것`;
+
+    console.log('📤 요청 전송 중...');
+
+    // File Search와 함께 사용 (프롬프트는 contents 안에!)
     const requestBody = {
       contents: [{
-        parts: [{ 
-          text: `${finalPrompt}\n\n---\n\n**사용자 질문:**\n${query}` 
-        }]
+        parts: [{ text: combinedPrompt }]
       }],
       tools: tools
     };
-
-    console.log('📤 요청 전송 중...');
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
@@ -347,13 +356,10 @@ app.post('/api/chat', async (req, res) => {
     const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '응답을 생성할 수 없습니다.';
     
     console.log('📝 답변 길이:', answer.length, '자');
-    console.log('📝 답변 미리보기:', answer.substring(0, 200));
+    console.log('📝 답변 미리보기:', answer.substring(0, 300));
     
-    // Grounding Metadata 추출
+    // 출처 추출
     const groundingMetadata = data.candidates?.[0]?.groundingMetadata;
-    
-    console.log('🔍 groundingMetadata 존재 여부:', !!groundingMetadata);
-    
     let sources = [];
     
     if (groundingMetadata?.groundingChunks) {
@@ -362,40 +368,41 @@ app.post('/api/chat', async (req, res) => {
       sources = groundingMetadata.groundingChunks.map((chunk, idx) => {
         const context = chunk.retrievedContext || chunk.web || {};
         
-        // text에서 URL 추출하기
         let url = '';
         let title = context.title || `문서 ${idx + 1}`;
         let type = '';
         
         if (context.text) {
-          // text에서 "URL: https://..." 패턴 찾기
           const urlMatch = context.text.match(/URL:\s*(https?:\/\/[^\s\n]+)/);
-          if (urlMatch) {
-            url = urlMatch[1];
-          }
+          if (urlMatch) url = urlMatch[1];
           
-          // text에서 "타입: YOUTUBE" 등 찾기
           const typeMatch = context.text.match(/타입:\s*([^\n]+)/);
-          if (typeMatch) {
-            type = typeMatch[1].trim();
-          }
+          if (typeMatch) type = typeMatch[1].trim();
           
-          // text에서 "제목: ..." 찾기 (더 정확한 제목)
           const titleMatch = context.text.match(/제목:\s*([^\n]+)/);
-          if (titleMatch) {
-            title = titleMatch[1].trim();
-          }
+          if (titleMatch) title = titleMatch[1].trim();
         }
         
-        return {
-          id: idx + 1,
-          title: title,
-          url: url,
-          type: type,
-          content: (context.text || '').substring(0, 200),
-          date: new Date().toISOString().split('T')[0]
+        return { 
+          id: idx + 1, 
+          title, 
+          url, 
+          type, 
+          content: (context.text || '').substring(0, 200), 
+          date: new Date().toISOString().split('T')[0] 
         };
       });
+      
+      // 중복 제거
+      const uniqueSources = [];
+      const seenUrls = new Set();
+      for (const source of sources) {
+        if (source.url && !seenUrls.has(source.url)) {
+          seenUrls.add(source.url);
+          uniqueSources.push(source);
+        }
+      }
+      sources = uniqueSources;
       
       console.log('✅ 출처 추출 완료:', sources.length, '개');
       sources.forEach((src, idx) => {
@@ -403,27 +410,9 @@ app.post('/api/chat', async (req, res) => {
         console.log(`     타입: ${src.type || '(없음)'}`);
         console.log(`     URL: ${src.url || '(없음)'}`);
       });
-      
-      // 중복 URL 제거
-      const uniqueSources = [];
-      const seenUrls = new Set();
-      
-      for (const source of sources) {
-        if (source.url && !seenUrls.has(source.url)) {
-          seenUrls.add(source.url);
-          uniqueSources.push(source);
-        }
-      }
-      
-      sources = uniqueSources;
-      console.log('✅ 중복 제거 후:', sources.length, '개');
-      
-    } else {
-      console.log('⚠️ groundingChunks 없음');
     }
     
     if (sources.length === 0) {
-      console.log('📝 기본 출처 생성');
       sources = [{
         id: 1,
         title: useWebSearch ? 'Web Search' : 'File Search Store',
@@ -454,6 +443,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 });
+
 
 
 // 관리자 API - 프롬프트
