@@ -395,10 +395,16 @@ app.post('/api/chat', async (req, res) => {
     console.log('🤖 Gemini 2.5 Flash 호출 중 (File Search 모드)...');
 
     // 공식 문서 기반 REST API 호출
+       // 개선된 REST API 호출 (system_instruction 분리)
     const requestBody = {
+      system_instruction: {
+        parts: [{
+          text: finalPrompt
+        }]
+      },
       contents: [{
         parts: [{
-          text: `${finalPrompt}\n\n**사용자 질문:**\n${query}`
+          text: query
         }]
       }],
       tools: [{
@@ -407,7 +413,7 @@ app.post('/api/chat', async (req, res) => {
         }
       }]
     };
-
+    
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
       {
