@@ -1,7 +1,9 @@
-require("dotenv").config();
-const express = require("express");
-const { GoogleGenAI } = require("@google/genai");
-const { createClient } = require("@supabase/supabase-js");
+import dotenv from "dotenv";
+import express from "express";
+import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
+
+dotenv.config();
 
 const app = express();
 app.use(express.json());
