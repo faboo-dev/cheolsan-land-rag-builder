@@ -9,8 +9,8 @@ const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const genAI = new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY });
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY);
 
 let fileSearchStoreName = null;
 let uploadedFilesCount = 0;
