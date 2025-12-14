@@ -375,7 +375,8 @@ app.post("/api/chat", async (req, res) => {
         },
       });
 
-      finalAnswer = result.response.text();
+      const responseObj = result.response;
+      finalAnswer = typeof responseObj.text === 'function' ? responseObj.text() : (responseObj.candidates?.[0]?.content?.parts?.[0]?.text || "응답 생성 실패");
       sources = extractSources(result.response.candidates[0].groundingMetadata);
       debugInfo = { method: "File Search API", chunksUsed: sources.length };
     }
@@ -456,7 +457,8 @@ ${getReinforcement()}
         },
       });
 
-      finalAnswer = result.response.text();
+      const responseObj = result.response;
+      finalAnswer = typeof responseObj.text === 'function' ? responseObj.text() : (responseObj.candidates?.[0]?.content?.parts?.[0]?.text || "응답 생성 실패");
     }
 
     // =======================================
@@ -552,7 +554,8 @@ ${previews}
         },
       });
 
-      finalAnswer = result.response.text();
+      const responseObj = result.response;
+      finalAnswer = typeof responseObj.text === 'function' ? responseObj.text() : (responseObj.candidates?.[0]?.content?.parts?.[0]?.text || "응답 생성 실패");
     }
 
     // =======================================
@@ -656,7 +659,8 @@ ${getReinforcement()}
         },
       });
 
-      finalAnswer = result.response.text();
+      const responseObj = result.response;
+      finalAnswer = typeof responseObj.text === 'function' ? responseObj.text() : (responseObj.candidates?.[0]?.content?.parts?.[0]?.text || "응답 생성 실패");
     }
 
     // =======================================
@@ -826,7 +830,8 @@ ${getReinforcement()}
         },
       });
 
-      finalAnswer = result.response.text();
+      const responseObj = result.response;
+      finalAnswer = typeof responseObj.text === 'function' ? responseObj.text() : (responseObj.candidates?.[0]?.content?.parts?.[0]?.text || "응답 생성 실패");
     }
 
     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
