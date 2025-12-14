@@ -1,51 +1,499 @@
 <!DOCTYPE html>
 <html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cheolsan Land RAG Builder</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              primary: '#0F766E', // Teal 700
-              secondary: '#0D9488', // Teal 600
-              accent: '#F59E0B', // Amber 500
-            }
-          }
-        }
-      }
-    </script>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>철산랜드 RAG 챗봇</title>
     <style>
-      body {
-        background-color: #F3F4F6;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 900px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f5f5f5;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            padding: 12px 18px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+
+        .message.user .message-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.bot .message-bubble {
+            background: white;
+            color: #333;
+            border: 1px solid #e0e0e0;
+        }
+
+        .message.bot .message-bubble a {
+            color: #667eea;
+            text-decoration: underline;
+        }
+
+        .sources {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-left: 3px solid #667eea;
+            border-radius: 5px;
+            font-size: 13px;
+        }
+
+        .sources-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #667eea;
+        }
+
+        .source-item {
+            margin: 5px 0;
+            padding: 5px;
+            background: white;
+            border-radius: 3px;
+        }
+
+        .source-item a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .source-item a:hover {
+            text-decoration: underline;
+        }
+
+        .debug-info {
+            margin-top: 10px;
+            padding: 8px;
+            background: #fff3cd;
+            border-left: 3px solid #ffc107;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .chat-input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .mode-selector {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .mode-selector-title {
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: #333;
+        }
+
+        .mode-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .mode-option {
+            padding: 10px;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-option:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .mode-option input[type="radio"] {
+            margin-right: 8px;
+        }
+
+        .mode-option label {
+            cursor: pointer;
+            display: block;
+        }
+
+        .mode-option strong {
+            display: block;
+            color: #333;
+            margin-bottom: 3px;
+        }
+
+        .mode-option small {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .web-search-toggle {
+            margin-top: 12px;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .web-search-toggle label {
+            cursor: pointer;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .web-search-toggle input[type="checkbox"] {
+            margin-right: 8px;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        #userInput {
+            flex: 1;
+            padding: 12px 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #userInput:focus {
+            border-color: #667eea;
+        }
+
+        #sendButton {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        #sendButton:hover {
+            transform: scale(1.05);
+        }
+
+        #sendButton:active {
+            transform: scale(0.95);
+        }
+
+        #sendButton:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 스크롤바 스타일 */
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+
+        /* 반응형 디자인 */
+        @media (max-width: 768px) {
+            .mode-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .message-bubble {
+                max-width: 85%;
+            }
+        }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "vite": "https://aistudiocdn.com/vite@^7.2.6",
-    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
-    "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0",
-    "remark-gfm": "https://aistudiocdn.com/remark-gfm@^4.0.1",
-    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.86.2",
-    "express": "https://aistudiocdn.com/express@^5.2.1",
-    "dotenv": "https://aistudiocdn.com/dotenv@^17.2.3",
-    "cors": "https://aistudiocdn.com/cors@^2.8.5"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
 </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            🏝️ 철산랜드 RAG 챗봇
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="message bot">
+                <div class="message-bubble">
+                    안녕하세요! 철산랜드 여행 상담 AI입니다. 😊<br>
+                    아래에서 원하는 검색 모드를 선택하고 질문해주세요!
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-area">
+            <!-- 모드 선택 UI -->
+            <div class="mode-selector">
+                <div class="mode-selector-title">🔍 검색 모드 선택:</div>
+                
+                <div class="mode-grid">
+                    <div class="mode-option">
+                        <input type="radio" id="mode1" name="searchMode" value="file_search_api" checked>
+                        <label for="mode1">
+                            <strong>모드1: File Search API</strong>
+                            <small>구글 관리 RAG (빠름, 3-5초)</small>
+                        </label>
+                    </div>
+
+                    <div class="mode-option">
+                        <input type="radio" id="mode2" name="searchMode" value="keyword_all_docs">
+                        <label for="mode2">
+                            <strong>모드2: 키워드→전체문서</strong>
+                            <small>매칭 문서 전부 전달 (느림, 30-60초)</small>
+                        </label>
+                    </div>
+
+                    <div class="mode-option">
+                        <input type="radio" id="mode3" name="searchMode" value="keyword_preview_select">
+                        <label for="mode3">
+                            <strong>모드3: 미리보기→선택</strong>
+                            <small>AI가 관련 문서 판단 (중간, 10-15초)</small>
+                        </label>
+                    </div>
+
+                    <div class="mode-option">
+                        <input type="radio" id="mode4" name="searchMode" value="two_stage_summary">
+                        <label for="mode4">
+                            <strong>모드4: 2단계 요약</strong>
+                            <small>각 문서 요약→통합 (느림, 30-45초)</small>
+                        </label>
+                    </div>
+
+                    <div class="mode-option">
+                        <input type="radio" id="mode5" name="searchMode" value="function_calling_search">
+                        <label for="mode5">
+                            <strong>모드5: Function Calling</strong>
+                            <small>AI가 검색어 결정 (중간, 8-12초)</small>
+                        </label>
+                    </div>
+
+                    <div class="mode-option">
+                        <input type="radio" id="mode6" name="searchMode" value="hybrid_chunk">
+                        <label for="mode6">
+                            <strong>모드6: 하이브리드 청크</strong>
+                            <small>여러 키워드 조합 (빠름, 5-8초)</small>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="web-search-toggle">
+                    <input type="checkbox" id="webSearchToggle">
+                    <label for="webSearchToggle">🌐 웹검색 크로스체크 활성화</label>
+                </div>
+            </div>
+
+            <!-- 입력창 -->
+            <div class="input-row">
+                <input 
+                    type="text" 
+                    id="userInput" 
+                    placeholder="질문을 입력하세요... (예: 세부 호핑투어 추천해줘)"
+                    onkeypress="if(event.key === 'Enter') sendMessage()"
+                >
+                <button id="sendButton" onclick="sendMessage()">전송</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const userInput = document.getElementById('userInput');
+        const sendButton = document.getElementById('sendButton');
+
+        // 메시지 추가 함수
+        function addMessage(text, isUser, sources = [], debugInfo = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.className = 'message-bubble';
+            
+            // 마크다운 링크를 HTML 링크로 변환
+            const formattedText = text.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            bubbleDiv.innerHTML = formattedText.replace(/\n/g, '<br>');
+
+            messageDiv.appendChild(bubbleDiv);
+
+            // 출처 표시
+            if (sources && sources.length > 0) {
+                const sourcesDiv = document.createElement('div');
+                sourcesDiv.className = 'sources';
+                
+                let sourcesHTML = '<div class="sources-title">📚 참고 출처:</div>';
+                sources.forEach((source, index) => {
+                    sourcesHTML += `
+                        <div class="source-item">
+                            ${index + 1}. <a href="${source.url}" target="_blank">${source.title}</a>
+                            <span style="color: #999; font-size: 11px;">(${source.type})</span>
+                        </div>
+                    `;
+                });
+                
+                sourcesDiv.innerHTML = sourcesHTML;
+                messageDiv.appendChild(sourcesDiv);
+            }
+
+            // 디버그 정보 표시
+            if (debugInfo) {
+                const debugDiv = document.createElement('div');
+                debugDiv.className = 'debug-info';
+                debugDiv.innerHTML = `
+                    <strong>⚙️ Debug Info:</strong><br>
+                    방식: ${debugInfo.method || 'N/A'}<br>
+                    응답시간: ${debugInfo.responseTime || 'N/A'}<br>
+                    문서수: ${debugInfo.documentsFound || debugInfo.chunksUsed || 'N/A'}<br>
+                    출처수: ${debugInfo.sourcesCount || 'N/A'}
+                    ${debugInfo.keywords ? `<br>검색어: ${JSON.stringify(debugInfo.keywords)}` : ''}
+                    ${debugInfo.selected ? `<br>선택: ${JSON.stringify(debugInfo.selected)}` : ''}
+                    ${debugInfo.summaries ? `<br>요약수: ${debugInfo.summaries}` : ''}
+                `;
+                messageDiv.appendChild(debugDiv);
+            }
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 메시지 전송 함수
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            const searchMode = document.querySelector('input[name="searchMode"]:checked').value;
+            const useWebSearch = document.getElementById('webSearchToggle').checked;
+
+            // 사용자 메시지 표시
+            addMessage(message, true);
+            userInput.value = '';
+
+            // 로딩 표시
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<div class="loading"></div>';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: message,
+                        searchMode: searchMode,
+                        useWebSearch: useWebSearch,
+                    }),
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    addMessage(data.response, false, data.sources, data.debug);
+                } else {
+                    addMessage(`오류가 발생했습니다: ${data.error}`, false);
+                }
+            } catch (error) {
+                addMessage(`네트워크 오류: ${error.message}`, false);
+            } finally {
+                sendButton.disabled = false;
+                sendButton.innerHTML = '전송';
+            }
+        }
+
+        // 엔터키로 전송
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
 </html>
